@@ -2,130 +2,28 @@ use tonic::{transport::Server, Request, Response, Status};
 use firehose::stream_server::{Stream, StreamServer};
 use codec::Block;
 use prost::Message;
+use archive::Archive;
+use std::sync::Arc;
+use tokio_stream::wrappers::ReceiverStream;
+use std::time::Duration;
 
+mod archive;
+
+#[allow(non_snake_case)]
 pub mod firehose {
     tonic::include_proto!("sf.firehose.v2");
 
     pub(crate) const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("firehose_descriptor");
 }
 
+#[allow(non_snake_case)]
 pub mod transforms {
     tonic::include_proto!("sf.ethereum.transform.v1");
 }
 
+#[allow(non_snake_case)]
 pub mod codec {
     tonic::include_proto!("sf.ethereum.r#type.v2");
-}
-
-pub mod archive {
-    use serde::{Serialize, Deserialize};
-    use serde_json::json;
-
-    #[derive(Serialize, Deserialize, Debug)]
-    #[serde(rename_all = "camelCase")]
-    pub struct BlockHeader {
-        pub number: u64,
-        pub hash: String,
-        pub parent_hash: String,
-        pub size: u64,
-        pub sha3_uncles: String,
-        pub miner: String,
-        pub state_root: String,
-        pub transactions_root: String,
-        pub receipts_root: String,
-        pub logs_bloom: String,
-        pub difficulty: String,
-        pub total_difficulty: String,
-        pub gas_limit: String,
-        pub gas_used: String,
-        pub timestamp: u64,
-        pub extra_data: String,
-        pub mix_hash: String,
-        pub nonce: String,
-        pub base_fee_per_gas: Option<String>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    pub struct Block {
-        pub header: BlockHeader,
-    }
-
-    #[derive(Debug)]
-    pub struct Archive {
-        client: reqwest::Client,
-    }
-
-    impl Archive {
-        pub fn new() -> Archive {
-            let client = reqwest::Client::new();
-            Archive { client }
-        }
-
-        pub async fn height(&self) -> Result<u64, reqwest::Error> {
-            let height = self.client.get("https://v2.archive.subsquid.io/network/ethereum-mainnet/height")
-                .send()
-                .await?
-                .text()
-                .await?
-                .parse()
-                .unwrap();
-            Ok(height)
-        }
-
-        pub async fn query(&self, from_block: u64, to_block: Option<u64>) -> Result<Vec<Block>, reqwest::Error> {
-            let worker_url = self.client.get(format!("https://v2.archive.subsquid.io/network/ethereum-mainnet/{}/worker", from_block))
-                .send()
-                .await?
-                .text()
-                .await?;
-
-            let mut query = json!({
-                "fromBlock": from_block,
-                "fields": {
-                    "block": {
-                        "number": true,
-                        "hash": true,
-                        "parentHash": true,
-                        "difficulty": true,
-                        "totalDifficulty": true,
-                        "size": true,
-                        "sha3Uncles": true,
-                        "gasLimit": true,
-                        "gasUsed": true,
-                        "timestamp": true,
-                        "miner": true,
-                        "stateRoot": true,
-                        "transactionsRoot": true,
-                        "receiptsRoot": true,
-                        "logsBloom": true,
-                        "extraData": true,
-                        "mixHash": true,
-                        "baseFeePerGas": true,
-                        "nonce": true
-                    }
-                }
-            });
-            if let Some(to_block) = to_block {
-                query.as_object_mut().unwrap().insert("toBlock".to_string(), to_block.into());
-            }
-
-            let response = self.client.post(worker_url)
-                .json(&query)
-                .send()
-                .await?;
-
-            if let Err(err) = response.error_for_status_ref() {
-                let text = response.text().await?;
-                dbg!(text);
-                return Err(err)
-            }
-
-            let blocks: Vec<Block> = response
-                .json()
-                .await?;
-            Ok(blocks)
-        }
-    }
 }
 
 async fn resolve_negative_start_block_num(start_block_num: i64, archive: &archive::Archive) -> u64 {
@@ -150,12 +48,12 @@ fn vec_from_hex(value: &str) -> Result<Vec<u8>, prefix_hex::Error> {
 
 #[derive(Debug)]
 pub struct ArchiveStream {
-    archive: std::sync::Arc<archive::Archive>,
+    archive: Arc<Archive>,
 }
 
 #[tonic::async_trait]
 impl Stream for ArchiveStream {
-    type BlocksStream = tokio_stream::wrappers::ReceiverStream<Result<firehose::Response, Status>>;
+    type BlocksStream = ReceiverStream<Result<firehose::Response, Status>>;
 
     async fn blocks(&self, request: Request<firehose::Request>) -> Result<Response<Self::BlocksStream>, Status> {
         let mut filters = vec![];
@@ -232,20 +130,20 @@ impl Stream for ArchiveStream {
                 }
 
                 if height <= last_block_num {
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(Duration::from_secs(5)).await;
                 }
 
                 from_block = last_block_num.into();
             }
         });
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "0.0.0.0:13042".parse()?;
-    let stream = ArchiveStream { archive: std::sync::Arc::new(archive::Archive::new()) };
+    let stream = ArchiveStream { archive: Arc::new(Archive::new()) };
     let reflection = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(firehose::FILE_DESCRIPTOR_SET)
         .build()?;
