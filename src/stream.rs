@@ -123,8 +123,13 @@ impl Stream for ArchiveStream {
             from_block,
             to_block,
             fields: Some(fields),
-            logs: Some(logs),
+            logs: None,
         };
+
+        if !logs.is_empty() {
+            req.logs = Some(logs);
+        }
+
         let mut request_count = 0;
         dbg!(request.get_ref());
         dbg!(&req);
@@ -132,8 +137,14 @@ impl Stream for ArchiveStream {
         let archive = self.archive.clone();
         tokio::spawn(async move {
             'outer: loop {
-                request_count += 1;
                 let height = archive.height().await.unwrap();
+
+                if height <= req.from_block {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+
+                request_count += 1;
                 let blocks = archive.query(&req).await.unwrap();
                 let last_block_num = blocks[blocks.len() - 1].header.number;
                 for block in blocks {
@@ -259,13 +270,10 @@ impl Stream for ArchiveStream {
                     }
                 }
 
-                if height <= last_block_num {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                } else {
-                    req.from_block = last_block_num + 1;
-                }
+                req.from_block = last_block_num + 1;
             }
         });
+
         Ok(tonic::Response::new(ReceiverStream::new(rx)))
     }
 }
