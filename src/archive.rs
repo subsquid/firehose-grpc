@@ -158,6 +158,18 @@ pub struct Block {
 }
 
 #[derive(Debug)]
+pub enum Error {
+    Http(reqwest::Error),
+    Parse(serde_json::Error),
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(err: reqwest::Error) -> Self {
+        Error::Http(err)
+    }
+}
+
+#[derive(Debug)]
 pub struct Archive {
     client: reqwest::Client,
 }
@@ -168,25 +180,49 @@ impl Archive {
         Archive { client }
     }
 
-    pub async fn height(&self) -> Result<u64, reqwest::Error> {
-        let height = self
+    pub async fn height(&self) -> Result<u64, Error> {
+        let response = self
             .client
             .get("https://v2.archive.subsquid.io/network/ethereum-mainnet/height")
             .send()
-            .await?
-            .text()
-            .await?
-            .parse()
-            .unwrap();
-        Ok(height)
+            .await?;
+
+        if let Err(err) = response.error_for_status_ref() {
+            let text = response.text().await?;
+            dbg!(text);
+            return Err(Error::Http(err));
+        }
+
+        let text = response.text().await?;
+        serde_json::from_str(&text).map_err(|err| {
+            dbg!(text);
+            Error::Parse(err)
+        })
     }
 
-    pub async fn query(&self, request: &BatchRequest) -> Result<Vec<Block>, reqwest::Error> {
+    pub async fn query(&self, request: &BatchRequest) -> Result<Vec<Block>, Error> {
+        let worker_url = self.worker(request.from_block).await?;
+        let response = self.client.post(worker_url).json(&request).send().await?;
+
+        if let Err(err) = response.error_for_status_ref() {
+            let text = response.text().await?;
+            dbg!(text);
+            return Err(Error::Http(err));
+        }
+
+        let text = response.text().await?;
+        serde_json::from_str(&text).map_err(|err| {
+            dbg!(text);
+            Error::Parse(err)
+        })
+    }
+
+    pub async fn worker(&self, start_block: u64) -> Result<String, Error> {
         let response = self
             .client
             .get(format!(
                 "https://v2.archive.subsquid.io/network/ethereum-mainnet/{}/worker",
-                request.from_block
+                start_block
             ))
             .send()
             .await?;
@@ -194,28 +230,9 @@ impl Archive {
         if let Err(err) = response.error_for_status_ref() {
             let text = response.text().await?;
             dbg!(text);
-            return Err(err);
+            return Err(Error::Http(err));
         }
 
-        let worker_url = response.text().await?;
-
-        let response = self.client.post(worker_url).json(&request).send().await?;
-
-        if let Err(err) = response.error_for_status_ref() {
-            let text = response.text().await?;
-            dbg!(text);
-            return Err(err);
-        }
-
-        let text = response.text().await?;
-        let blocks = match serde_json::from_str(&text) {
-            Ok(blocks) => blocks,
-            Err(err) => {
-                dbg!(text, err);
-                panic!("decode error");
-            }
-        };
-
-        Ok(blocks)
+        response.text().await.map_err(|err| Error::Http(err))
     }
 }
