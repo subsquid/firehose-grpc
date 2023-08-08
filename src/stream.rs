@@ -1,15 +1,15 @@
-use tokio_stream::wrappers::ReceiverStream;
-use std::time::Duration;
-use std::sync::Arc;
-use std::collections::HashMap;
-use prost::Message;
 use crate::archive::{
-    Archive, BatchRequest, FieldSelection, BlockFieldSelection, LogFieldSelection, TxFieldSelection,
-    LogRequest, Log,
+    Archive, BatchRequest, BlockFieldSelection, FieldSelection, Log, LogFieldSelection, LogRequest,
+    TxFieldSelection,
 };
 use crate::codec;
 use crate::firehose::{stream_server::Stream, Request, Response};
 use crate::transforms::CombinedFilter;
+use prost::Message;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio_stream::wrappers::ReceiverStream;
 
 async fn resolve_negative_start_block_num(start_block_num: i64, archive: &Archive) -> u64 {
     if start_block_num < 0 {
@@ -40,7 +40,10 @@ pub struct ArchiveStream {
 impl Stream for ArchiveStream {
     type BlocksStream = ReceiverStream<Result<Response, tonic::Status>>;
 
-    async fn blocks(&self, request: tonic::Request<Request>) -> Result<tonic::Response<Self::BlocksStream>, tonic::Status> {
+    async fn blocks(
+        &self,
+        request: tonic::Request<Request>,
+    ) -> Result<tonic::Response<Self::BlocksStream>, tonic::Status> {
         let mut fields = FieldSelection {
             block: Some(BlockFieldSelection {
                 base_fee_per_gas: true,
@@ -72,8 +75,16 @@ impl Stream for ArchiveStream {
             let filter = CombinedFilter::decode(&transform.value[..]).unwrap();
             for log_filter in filter.log_filters {
                 let log_request = LogRequest {
-                    address: log_filter.addresses.into_iter().map(|address| prefix_hex::encode(address)).collect(),
-                    topic0: log_filter.event_signatures.into_iter().map(|signature| prefix_hex::encode(signature)).collect(),
+                    address: log_filter
+                        .addresses
+                        .into_iter()
+                        .map(|address| prefix_hex::encode(address))
+                        .collect(),
+                    topic0: log_filter
+                        .event_signatures
+                        .into_iter()
+                        .map(|signature| prefix_hex::encode(signature))
+                        .collect(),
                     topic1: vec![],
                     topic2: vec![],
                     topic3: vec![],
@@ -113,7 +124,9 @@ impl Stream for ArchiveStream {
         }
 
         let is_head_stream = request.get_ref().start_block_num == -1;
-        let from_block = resolve_negative_start_block_num(request.get_ref().start_block_num, &self.archive).await;
+        let from_block =
+            resolve_negative_start_block_num(request.get_ref().start_block_num, &self.archive)
+                .await;
         let to_block = if request.get_ref().stop_block_num == 0 {
             None
         } else {
@@ -158,24 +171,44 @@ impl Stream for ArchiveStream {
                             uncle_hash: prefix_hex::decode(block.header.sha3_uncles).unwrap(),
                             coinbase: prefix_hex::decode(block.header.miner).unwrap(),
                             state_root: prefix_hex::decode(block.header.state_root).unwrap(),
-                            transactions_root: prefix_hex::decode(block.header.transactions_root).unwrap(),
+                            transactions_root: prefix_hex::decode(block.header.transactions_root)
+                                .unwrap(),
                             receipt_root: prefix_hex::decode(block.header.receipts_root).unwrap(),
                             logs_bloom: prefix_hex::decode(block.header.logs_bloom).unwrap(),
-                            difficulty: Some(codec::BigInt { bytes: vec_from_hex(&block.header.difficulty).unwrap() }),
-                            total_difficulty: Some(codec::BigInt { bytes: vec_from_hex(&block.header.total_difficulty).unwrap() }),
+                            difficulty: Some(codec::BigInt {
+                                bytes: vec_from_hex(&block.header.difficulty).unwrap(),
+                            }),
+                            total_difficulty: Some(codec::BigInt {
+                                bytes: vec_from_hex(&block.header.total_difficulty).unwrap(),
+                            }),
                             number: block.header.number,
-                            gas_limit: u64::from_str_radix(&block.header.gas_limit.trim_start_matches("0x"), 16).unwrap(),
-                            gas_used: u64::from_str_radix(&block.header.gas_used.trim_start_matches("0x"), 16).unwrap(),
+                            gas_limit: u64::from_str_radix(
+                                &block.header.gas_limit.trim_start_matches("0x"),
+                                16,
+                            )
+                            .unwrap(),
+                            gas_used: u64::from_str_radix(
+                                &block.header.gas_used.trim_start_matches("0x"),
+                                16,
+                            )
+                            .unwrap(),
                             timestamp: Some(prost_types::Timestamp {
                                 seconds: i64::try_from(block.header.timestamp).unwrap(),
                                 nanos: 0,
                             }),
                             extra_data: prefix_hex::decode(block.header.extra_data).unwrap(),
                             mix_hash: prefix_hex::decode(block.header.mix_hash).unwrap(),
-                            nonce: u64::from_str_radix(&block.header.nonce.trim_start_matches("0x"), 16).unwrap(),
+                            nonce: u64::from_str_radix(
+                                &block.header.nonce.trim_start_matches("0x"),
+                                16,
+                            )
+                            .unwrap(),
                             hash: prefix_hex::decode(block.header.hash).unwrap(),
-                            base_fee_per_gas: block.header.base_fee_per_gas
-                                .and_then(|val| Some(codec::BigInt { bytes: vec_from_hex(&val).unwrap() })),
+                            base_fee_per_gas: block.header.base_fee_per_gas.and_then(|val| {
+                                Some(codec::BigInt {
+                                    bytes: vec_from_hex(&val).unwrap(),
+                                })
+                            }),
                         }),
                         uncles: vec![],
                         transaction_traces: vec![],
@@ -187,7 +220,10 @@ impl Stream for ArchiveStream {
                     if let Some(logs) = block.logs {
                         for log in logs {
                             if logs_by_tx.contains_key(&log.transaction_index) {
-                                logs_by_tx.get_mut(&log.transaction_index).unwrap().push(log);
+                                logs_by_tx
+                                    .get_mut(&log.transaction_index)
+                                    .unwrap()
+                                    .push(log);
                             } else {
                                 logs_by_tx.insert(log.transaction_index, vec![log]);
                             }
@@ -250,14 +286,17 @@ impl Stream for ArchiveStream {
                             request_count,
                         ));
                     }
-                    let result = tx.send(Ok(Response {
-                        block: Some(prost_types::Any {
-                            type_url: "type.googleapis.com/sf.ethereum.type.v2.Block".to_string(),
-                            value: graph_block.encode_to_vec(),
-                        }),
-                        step: 1,
-                        cursor: graph_block.number.to_string(),
-                    })).await;
+                    let result = tx
+                        .send(Ok(Response {
+                            block: Some(prost_types::Any {
+                                type_url: "type.googleapis.com/sf.ethereum.type.v2.Block"
+                                    .to_string(),
+                                value: graph_block.encode_to_vec(),
+                            }),
+                            step: 1,
+                            cursor: graph_block.number.to_string(),
+                        }))
+                        .await;
 
                     if let Err(_) = result {
                         break 'outer;

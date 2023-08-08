@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LogRequest {
@@ -154,7 +154,7 @@ pub struct Transaction {
 pub struct Block {
     pub header: BlockHeader,
     pub logs: Option<Vec<Log>>,
-    pub transactions: Option<Vec<Transaction>>
+    pub transactions: Option<Vec<Transaction>>,
 }
 
 #[derive(Debug)]
@@ -169,7 +169,9 @@ impl Archive {
     }
 
     pub async fn height(&self) -> Result<u64, reqwest::Error> {
-        let height = self.client.get("https://v2.archive.subsquid.io/network/ethereum-mainnet/height")
+        let height = self
+            .client
+            .get("https://v2.archive.subsquid.io/network/ethereum-mainnet/height")
             .send()
             .await?
             .text()
@@ -180,27 +182,29 @@ impl Archive {
     }
 
     pub async fn query(&self, request: &BatchRequest) -> Result<Vec<Block>, reqwest::Error> {
-        let response = self.client.get(format!("https://v2.archive.subsquid.io/network/ethereum-mainnet/{}/worker", request.from_block))
+        let response = self
+            .client
+            .get(format!(
+                "https://v2.archive.subsquid.io/network/ethereum-mainnet/{}/worker",
+                request.from_block
+            ))
             .send()
             .await?;
 
         if let Err(err) = response.error_for_status_ref() {
             let text = response.text().await?;
             dbg!(text);
-            return Err(err)
+            return Err(err);
         }
 
         let worker_url = response.text().await?;
 
-        let response = self.client.post(worker_url)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.client.post(worker_url).json(&request).send().await?;
 
         if let Err(err) = response.error_for_status_ref() {
             let text = response.text().await?;
             dbg!(text);
-            return Err(err)
+            return Err(err);
         }
 
         let text = response.text().await?;

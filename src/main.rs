@@ -1,19 +1,20 @@
-use tonic::transport::Server;
-use std::sync::Arc;
 use archive::Archive;
-use firehose::{stream_server::StreamServer, fetch_server::FetchServer};
-use stream::ArchiveStream;
 use fetch::ArchiveFetch;
+use firehose::{fetch_server::FetchServer, stream_server::StreamServer};
+use std::sync::Arc;
+use stream::ArchiveStream;
+use tonic::transport::Server;
 
 mod archive;
-mod stream;
 mod fetch;
+mod stream;
 
 #[allow(non_snake_case)]
 pub mod firehose {
     tonic::include_proto!("sf.firehose.v2");
 
-    pub(crate) const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("firehose_descriptor");
+    pub(crate) const FILE_DESCRIPTOR_SET: &[u8] =
+        tonic::include_file_descriptor_set!("firehose_descriptor");
 }
 
 #[allow(non_snake_case)]
@@ -29,7 +30,9 @@ pub mod codec {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let archive = Arc::new(Archive::new());
-    let stream_service = StreamServer::new(ArchiveStream { archive: archive.clone() });
+    let stream_service = StreamServer::new(ArchiveStream {
+        archive: archive.clone(),
+    });
     let fetch_service = FetchServer::new(ArchiveFetch { archive });
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(firehose::FILE_DESCRIPTOR_SET)
