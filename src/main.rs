@@ -1,11 +1,13 @@
 use tonic::transport::Server;
 use std::sync::Arc;
 use archive::Archive;
-use firehose::stream_server::StreamServer;
+use firehose::{stream_server::StreamServer, fetch_server::FetchServer};
 use stream::ArchiveStream;
+use fetch::ArchiveFetch;
 
 mod archive;
 mod stream;
+mod fetch;
 
 #[allow(non_snake_case)]
 pub mod firehose {
@@ -26,7 +28,9 @@ pub mod codec {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let stream_service = StreamServer::new(ArchiveStream { archive: Arc::new(Archive::new()) });
+    let archive = Arc::new(Archive::new());
+    let stream_service = StreamServer::new(ArchiveStream { archive: archive.clone() });
+    let fetch_service = FetchServer::new(ArchiveFetch { archive });
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(firehose::FILE_DESCRIPTOR_SET)
         .build()?;
@@ -34,6 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "0.0.0.0:13042".parse()?;
     Server::builder()
         .add_service(stream_service)
+        .add_service(fetch_service)
         .add_service(reflection_service)
         .serve(addr)
         .await?;

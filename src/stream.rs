@@ -205,7 +205,7 @@ impl Stream for ArchiveStream {
                                 ordinal: 0,
                             }).collect();
                             codec::TransactionTrace {
-                                to: prefix_hex::decode(tx.to).unwrap(),
+                                to: prefix_hex::decode(tx.to.unwrap_or("0x".to_string())).unwrap(),
                                 nonce: tx.nonce,
                                 gas_price: Some(codec::BigInt { bytes: vec_from_hex(&tx.gas_price).unwrap() }),
                                 gas_limit: u64::from_str_radix(&tx.gas.trim_start_matches("0x"), 16).unwrap(),
@@ -256,7 +256,7 @@ impl Stream for ArchiveStream {
                             value: graph_block.encode_to_vec(),
                         }),
                         step: 1,
-                        cursor: request.get_ref().cursor.clone(),
+                        cursor: graph_block.number.to_string(),
                     })).await;
 
                     if let Err(_) = result {

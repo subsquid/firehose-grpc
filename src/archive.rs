@@ -132,7 +132,7 @@ pub struct Transaction {
     pub hash: String,
     pub nonce: u64,
     pub from: String,
-    pub to: String,
+    pub to: Option<String>,
     pub input: String,
     pub value: String,
     pub gas: String,
