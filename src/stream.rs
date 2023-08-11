@@ -2,9 +2,9 @@ use crate::archive::{
     Archive, BatchRequest, BlockFieldSelection, FieldSelection, Log, LogFieldSelection, LogRequest,
     TxFieldSelection,
 };
-use crate::codec;
-use crate::firehose::{stream_server::Stream, Request, Response};
-use crate::transforms::CombinedFilter;
+use crate::pbcodec;
+use crate::pbfirehose::{stream_server::Stream, Request, Response};
+use crate::pbtransforms::CombinedFilter;
 use prost::Message;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -161,12 +161,12 @@ impl Stream for ArchiveStream {
                 let blocks = archive.query(&req).await.unwrap();
                 let last_block_num = blocks[blocks.len() - 1].header.number;
                 for block in blocks {
-                    let mut graph_block = codec::Block {
+                    let mut graph_block = pbcodec::Block {
                         ver: 2,
                         hash: prefix_hex::decode(block.header.hash.clone()).unwrap(),
                         number: block.header.number,
                         size: block.header.size,
-                        header: Some(codec::BlockHeader {
+                        header: Some(pbcodec::BlockHeader {
                             parent_hash: prefix_hex::decode(block.header.parent_hash).unwrap(),
                             uncle_hash: prefix_hex::decode(block.header.sha3_uncles).unwrap(),
                             coinbase: prefix_hex::decode(block.header.miner).unwrap(),
@@ -175,10 +175,10 @@ impl Stream for ArchiveStream {
                                 .unwrap(),
                             receipt_root: prefix_hex::decode(block.header.receipts_root).unwrap(),
                             logs_bloom: prefix_hex::decode(block.header.logs_bloom).unwrap(),
-                            difficulty: Some(codec::BigInt {
+                            difficulty: Some(pbcodec::BigInt {
                                 bytes: vec_from_hex(&block.header.difficulty).unwrap(),
                             }),
-                            total_difficulty: Some(codec::BigInt {
+                            total_difficulty: Some(pbcodec::BigInt {
                                 bytes: vec_from_hex(&block.header.total_difficulty).unwrap(),
                             }),
                             number: block.header.number,
@@ -205,7 +205,7 @@ impl Stream for ArchiveStream {
                             .unwrap(),
                             hash: prefix_hex::decode(block.header.hash).unwrap(),
                             base_fee_per_gas: block.header.base_fee_per_gas.and_then(|val| {
-                                Some(codec::BigInt {
+                                Some(pbcodec::BigInt {
                                     bytes: vec_from_hex(&val).unwrap(),
                                 })
                             }),
@@ -232,7 +232,7 @@ impl Stream for ArchiveStream {
 
                     if let Some(transactions) = block.transactions {
                         graph_block.transaction_traces = transactions.into_iter().map(|tx| {
-                            let logs = logs_by_tx.remove(&tx.transaction_index).unwrap_or_default().into_iter().map(|log| codec::Log {
+                            let logs = logs_by_tx.remove(&tx.transaction_index).unwrap_or_default().into_iter().map(|log| pbcodec::Log {
                                 address: prefix_hex::decode(log.address).unwrap(),
                                 data: prefix_hex::decode(log.data).unwrap(),
                                 block_index: log.log_index,
@@ -240,13 +240,13 @@ impl Stream for ArchiveStream {
                                 index: log.transaction_index,
                                 ordinal: 0,
                             }).collect();
-                            codec::TransactionTrace {
+                            pbcodec::TransactionTrace {
                                 to: prefix_hex::decode(tx.to.unwrap_or("0x".to_string())).unwrap(),
                                 nonce: tx.nonce,
-                                gas_price: Some(codec::BigInt { bytes: vec_from_hex(&tx.gas_price).unwrap() }),
+                                gas_price: Some(pbcodec::BigInt { bytes: vec_from_hex(&tx.gas_price).unwrap() }),
                                 gas_limit: u64::from_str_radix(&tx.gas.trim_start_matches("0x"), 16).unwrap(),
                                 gas_used: u64::from_str_radix(&tx.gas_used.trim_start_matches("0x"), 16).unwrap(),
-                                value: Some(codec::BigInt { bytes: vec_from_hex(&tx.value).unwrap() }),
+                                value: Some(pbcodec::BigInt { bytes: vec_from_hex(&tx.value).unwrap() }),
                                 input: prefix_hex::decode(tx.input).unwrap(),
                                 v: vec_from_hex(&tx.v).unwrap(),
                                 r: vec_from_hex(&tx.r).unwrap(),
@@ -254,9 +254,9 @@ impl Stream for ArchiveStream {
                                 r#type: tx.r#type,
                                 access_list: vec![],
                                 max_fee_per_gas: tx.max_fee_per_gas
-                                    .and_then(|val| Some(codec::BigInt { bytes: vec_from_hex(&val).unwrap() })),
+                                    .and_then(|val| Some(pbcodec::BigInt { bytes: vec_from_hex(&val).unwrap() })),
                                 max_priority_fee_per_gas: tx.max_priority_fee_per_gas
-                                    .and_then(|val| Some(codec::BigInt { bytes: vec_from_hex(&val).unwrap() })),
+                                    .and_then(|val| Some(pbcodec::BigInt { bytes: vec_from_hex(&val).unwrap() })),
                                 index: tx.transaction_index,
                                 hash: prefix_hex::decode(tx.hash).unwrap(),
                                 from: prefix_hex::decode(tx.from).unwrap(),
@@ -265,7 +265,7 @@ impl Stream for ArchiveStream {
                                 begin_ordinal: 0,
                                 end_ordinal: 0,
                                 status: tx.status,
-                                receipt: Some(codec::TransactionReceipt {
+                                receipt: Some(pbcodec::TransactionReceipt {
                                     state_root: vec![],
                                     cumulative_gas_used: u64::from_str_radix(&tx.cumulative_gas_used.trim_start_matches("0x"), 16).unwrap(),
                                     logs_bloom: prefix_hex::decode("0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap(),

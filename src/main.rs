@@ -1,6 +1,6 @@
 use archive::Archive;
 use fetch::ArchiveFetch;
-use firehose::{fetch_server::FetchServer, stream_server::StreamServer};
+use pbfirehose::{fetch_server::FetchServer, stream_server::StreamServer};
 use std::sync::Arc;
 use stream::ArchiveStream;
 use tonic::transport::Server;
@@ -9,23 +9,16 @@ mod archive;
 mod fetch;
 mod stream;
 
-#[allow(non_snake_case)]
-pub mod firehose {
-    tonic::include_proto!("sf.firehose.v2");
+#[path = "protobuf/sf.firehose.v2.rs"]
+mod pbfirehose;
 
-    pub(crate) const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("firehose_descriptor");
-}
+#[path = "protobuf/sf.ethereum.transform.v1.rs"]
+mod pbtransforms;
 
-#[allow(non_snake_case)]
-pub mod transforms {
-    tonic::include_proto!("sf.ethereum.transform.v1");
-}
+#[path = "protobuf/sf.ethereum.r#type.v2.rs"]
+mod pbcodec;
 
-#[allow(non_snake_case)]
-pub mod codec {
-    tonic::include_proto!("sf.ethereum.r#type.v2");
-}
+const FIREHOSE_DESCRIPTOR: &[u8] = tonic::include_file_descriptor_set!("firehose_descriptor");
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let fetch_service = FetchServer::new(ArchiveFetch { archive });
     let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(firehose::FILE_DESCRIPTOR_SET)
+        .register_encoded_file_descriptor_set(FIREHOSE_DESCRIPTOR)
         .build()?;
 
     let addr = "0.0.0.0:13042".parse()?;

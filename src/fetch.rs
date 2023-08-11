@@ -1,7 +1,7 @@
 use crate::archive::{Archive, BatchRequest, BlockFieldSelection, FieldSelection};
-use crate::codec;
-use crate::firehose::single_block_request::Reference;
-use crate::firehose::{fetch_server::Fetch, SingleBlockRequest, SingleBlockResponse};
+use crate::pbcodec;
+use crate::pbfirehose::single_block_request::Reference;
+use crate::pbfirehose::{fetch_server::Fetch, SingleBlockRequest, SingleBlockResponse};
 use prost::Message;
 use std::sync::Arc;
 
@@ -64,12 +64,12 @@ impl Fetch for ArchiveFetch {
         };
         let blocks = self.archive.query(&req).await.unwrap();
         let block = blocks.into_iter().nth(0).unwrap();
-        let graph_block = codec::Block {
+        let graph_block = pbcodec::Block {
             ver: 2,
             hash: prefix_hex::decode(block.header.hash.clone()).unwrap(),
             number: block.header.number,
             size: block.header.size,
-            header: Some(codec::BlockHeader {
+            header: Some(pbcodec::BlockHeader {
                 parent_hash: prefix_hex::decode(block.header.parent_hash).unwrap(),
                 uncle_hash: prefix_hex::decode(block.header.sha3_uncles).unwrap(),
                 coinbase: prefix_hex::decode(block.header.miner).unwrap(),
@@ -77,10 +77,10 @@ impl Fetch for ArchiveFetch {
                 transactions_root: prefix_hex::decode(block.header.transactions_root).unwrap(),
                 receipt_root: prefix_hex::decode(block.header.receipts_root).unwrap(),
                 logs_bloom: prefix_hex::decode(block.header.logs_bloom).unwrap(),
-                difficulty: Some(codec::BigInt {
+                difficulty: Some(pbcodec::BigInt {
                     bytes: vec_from_hex(&block.header.difficulty).unwrap(),
                 }),
-                total_difficulty: Some(codec::BigInt {
+                total_difficulty: Some(pbcodec::BigInt {
                     bytes: vec_from_hex(&block.header.total_difficulty).unwrap(),
                 }),
                 number: block.header.number,
@@ -101,7 +101,7 @@ impl Fetch for ArchiveFetch {
                     .unwrap(),
                 hash: prefix_hex::decode(block.header.hash).unwrap(),
                 base_fee_per_gas: block.header.base_fee_per_gas.and_then(|val| {
-                    Some(codec::BigInt {
+                    Some(pbcodec::BigInt {
                         bytes: vec_from_hex(&val).unwrap(),
                     })
                 }),
