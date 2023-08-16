@@ -1,5 +1,6 @@
 use archive::Archive;
 use fetch::ArchiveFetch;
+use firehose::Firehose;
 use pbfirehose::{fetch_server::FetchServer, stream_server::StreamServer};
 use std::sync::Arc;
 use stream::ArchiveStream;
@@ -7,6 +8,7 @@ use tonic::transport::Server;
 
 mod archive;
 mod fetch;
+mod firehose;
 mod stream;
 
 #[path = "protobuf/sf.firehose.v2.rs"]
@@ -23,10 +25,10 @@ const FIREHOSE_DESCRIPTOR: &[u8] = tonic::include_file_descriptor_set!("firehose
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let archive = Arc::new(Archive::new());
-    let stream_service = StreamServer::new(ArchiveStream {
-        archive: archive.clone(),
-    });
-    let fetch_service = FetchServer::new(ArchiveFetch { archive });
+    let firehose = Arc::new(Firehose::new(archive));
+
+    let stream_service = StreamServer::new(ArchiveStream::new(firehose.clone()));
+    let fetch_service = FetchServer::new(ArchiveFetch::new(firehose));
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(FIREHOSE_DESCRIPTOR)
         .build()?;
