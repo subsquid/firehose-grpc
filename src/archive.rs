@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct LogRequest {
     pub address: Vec<String>,
     pub topic0: Vec<String>,
@@ -8,6 +9,7 @@ pub struct LogRequest {
     pub topic2: Vec<String>,
     pub topic3: Vec<String>,
     pub transaction: bool,
+    pub transaction_traces: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -70,6 +72,28 @@ pub struct TxFieldSelection {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceFieldSelection {
+    pub transaction_index: bool,
+    pub r#type: bool,
+    pub error: bool,
+    pub revert_reason: bool,
+    pub create_from: bool,
+    pub create_value: bool,
+    pub create_gas: bool,
+    pub create_result_gas_used: bool,
+    pub create_result_address: bool,
+    pub call_from: bool,
+    pub call_to: bool,
+    pub call_value: bool,
+    pub call_gas: bool,
+    pub call_input: bool,
+    pub call_type: bool,
+    pub call_result_gas_used: bool,
+    pub call_result_output: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct FieldSelection {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block: Option<BlockFieldSelection>,
@@ -77,6 +101,8 @@ pub struct FieldSelection {
     pub log: Option<LogFieldSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction: Option<TxFieldSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace: Option<TraceFieldSelection>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -151,10 +177,51 @@ pub struct Transaction {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum TraceType {
+    Create,
+    Call,
+    Suicide,
+    Reward,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum CallType {
+    Call,
+    Callcode,
+    Delegatecall,
+    Staticcall,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Trace {
+    pub transaction_index: u32,
+    pub r#type: TraceType,
+    pub error: Option<String>,
+    pub revert_reason: Option<String>,
+    pub create_from: Option<String>,
+    pub create_value: Option<String>,
+    pub create_gas: Option<String>,
+    pub create_result_gas_used: Option<String>,
+    pub create_result_address: Option<String>,
+    pub call_from: Option<String>,
+    pub call_to: Option<String>,
+    pub call_value: Option<String>,
+    pub call_gas: Option<String>,
+    pub call_input: Option<String>,
+    pub call_type: Option<CallType>,
+    pub call_result_gas_used: Option<String>,
+    pub call_result_output: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Block {
     pub header: BlockHeader,
     pub logs: Option<Vec<Log>>,
     pub transactions: Option<Vec<Transaction>>,
+    pub traces: Option<Vec<Trace>>,
 }
 
 #[derive(Debug)]

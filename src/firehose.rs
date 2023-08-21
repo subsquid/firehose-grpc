@@ -1,6 +1,6 @@
 use crate::archive::{
-    Archive, BatchRequest, BlockFieldSelection, FieldSelection, Log, LogFieldSelection, LogRequest,
-    TxFieldSelection,
+    Archive, BatchRequest, BlockFieldSelection, CallType, FieldSelection, Log, LogFieldSelection,
+    LogRequest, Trace, TraceFieldSelection, TraceType, TxFieldSelection,
 };
 use crate::pbcodec;
 use crate::pbfirehose::single_block_request::Reference;
@@ -68,6 +68,7 @@ impl Firehose {
             }),
             log: None,
             transaction: None,
+            trace: None,
         };
         let mut logs: Vec<LogRequest> = vec![];
 
@@ -89,6 +90,7 @@ impl Firehose {
                     topic2: vec![],
                     topic3: vec![],
                     transaction: true,
+                    transaction_traces: true,
                 };
                 logs.push(log_request);
                 fields.log = Some(LogFieldSelection {
@@ -119,13 +121,32 @@ impl Firehose {
                     v: true,
                     value: true,
                     y_parity: true,
-                })
+                });
+                fields.trace = Some(TraceFieldSelection {
+                    transaction_index: true,
+                    r#type: true,
+                    revert_reason: true,
+                    error: true,
+                    create_from: true,
+                    create_value: true,
+                    create_gas: true,
+                    create_result_gas_used: true,
+                    create_result_address: true,
+                    call_from: true,
+                    call_to: true,
+                    call_value: true,
+                    call_gas: true,
+                    call_input: true,
+                    call_type: true,
+                    call_result_gas_used: true,
+                    call_result_output: true,
+                });
             }
         }
 
         let from_block =
             resolve_negative_start_block_num(request.start_block_num, &self.archive).await;
-        let to_block = if request.stop_block_num == 0 {
+        let to_block = if from_block != request.stop_block_num && request.stop_block_num == 0 {
             None
         } else {
             Some(request.stop_block_num)
@@ -213,12 +234,24 @@ impl Firehose {
                     if let Some(logs) = block.logs {
                         for log in logs {
                             if logs_by_tx.contains_key(&log.transaction_index) {
-                                logs_by_tx
-                                    .get_mut(&log.transaction_index)
+                                logs_by_tx.get_mut(&log.transaction_index)
                                     .unwrap()
                                     .push(log);
                             } else {
                                 logs_by_tx.insert(log.transaction_index, vec![log]);
+                            }
+                        }
+                    }
+
+                    let mut traces_by_tx: HashMap<u32, Vec<Trace>> = HashMap::new();
+                    if let Some(traces) = block.traces {
+                        for trace in traces {
+                            if traces_by_tx.contains_key(&trace.transaction_index) {
+                                traces_by_tx.get_mut(&trace.transaction_index)
+                                    .unwrap()
+                                    .push(trace);
+                            } else {
+                                traces_by_tx.insert(trace.transaction_index, vec![trace]);
                             }
                         }
                     }
@@ -232,6 +265,82 @@ impl Firehose {
                                 topics: log.topics.into_iter().map(|topic| prefix_hex::decode(topic).unwrap()).collect(),
                                 index: log.transaction_index,
                                 ordinal: 0,
+                            }).collect();
+                            let calls = traces_by_tx.remove(&tx.transaction_index).unwrap_or_default().into_iter().filter_map(|trace| {
+                                let call_type = match trace.r#type {
+                                    TraceType::Create => 5,
+                                    TraceType::Call => match trace.call_type.unwrap() {
+                                        CallType::Call => 1,
+                                        CallType::Callcode => 2,
+                                        CallType::Delegatecall => 3,
+                                        CallType::Staticcall => 4,
+                                    },
+                                    TraceType::Suicide | TraceType::Reward => return None,
+                                };
+                                let caller = match trace.r#type {
+                                    TraceType::Create => trace.create_from.unwrap(),
+                                    TraceType::Call => trace.call_from.unwrap(),
+                                    TraceType::Suicide | TraceType::Reward => return None,
+                                };
+                                let address = match trace.r#type {
+                                    TraceType::Create => trace.create_result_address.unwrap(),
+                                    TraceType::Call => trace.call_to.unwrap(),
+                                    TraceType::Suicide | TraceType::Reward => return None,
+                                };
+                                let value = match trace.r#type {
+                                    TraceType::Create => trace.create_value.unwrap(),
+                                    TraceType::Call => trace.call_value.unwrap(),
+                                    TraceType::Suicide | TraceType::Reward => return None,
+                                };
+                                let gas = match trace.r#type {
+                                    TraceType::Create => trace.create_gas.unwrap(),
+                                    TraceType::Call => trace.call_gas.unwrap(),
+                                    TraceType::Suicide | TraceType::Reward => return None,
+                                };
+                                let gas_used = match trace.r#type {
+                                    TraceType::Create => trace.create_result_gas_used.unwrap(),
+                                    TraceType::Call => trace.call_result_gas_used.unwrap(),
+                                    TraceType::Suicide | TraceType::Reward => return None,
+                                };
+                                let output = match trace.r#type {
+                                    TraceType::Create => "0x".to_string(),
+                                    TraceType::Call => trace.call_result_output.unwrap(),
+                                    TraceType::Suicide | TraceType::Reward => return None,
+                                };
+                                let input = match trace.r#type {
+                                    TraceType::Create => "0x".to_string(),
+                                    TraceType::Call => trace.call_input.unwrap(),
+                                    TraceType::Suicide | TraceType::Reward => return None,
+                                };
+                                Some(pbcodec::Call {
+                                    index: 0,
+                                    parent_index: 0,
+                                    depth: 0,
+                                    call_type,
+                                    caller: vec_from_hex(&caller).unwrap(),
+                                    address: vec_from_hex(&address).unwrap(),
+                                    value: Some(pbcodec::BigInt { bytes: vec_from_hex(&value).unwrap() }),
+                                    gas_limit: gas.parse().unwrap(),
+                                    gas_consumed: gas_used.parse().unwrap(),
+                                    return_data: vec_from_hex(&output).unwrap(),
+                                    input: vec_from_hex(&input).unwrap(),
+                                    executed_code: false,
+                                    suicide: false,
+                                    keccak_preimages: HashMap::new(),
+                                    storage_changes: vec![],
+                                    balance_changes: vec![],
+                                    nonce_changes: vec![],
+                                    logs: vec![],
+                                    code_changes: vec![],
+                                    gas_changes: vec![],
+                                    status_failed: trace.error.is_some() || trace.revert_reason.is_some(),
+                                    status_reverted: trace.revert_reason.is_some(),
+                                    failure_reason: trace.error.unwrap_or_else(|| trace.revert_reason.unwrap_or_default()),
+                                    state_reverted: false,
+                                    begin_ordinal: 0,
+                                    end_ordinal: 0,
+                                    account_creations: vec![],
+                                })
                             }).collect();
                             pbcodec::TransactionTrace {
                                 to: prefix_hex::decode(tx.to.unwrap_or("0x".to_string())).unwrap(),
@@ -264,7 +373,7 @@ impl Firehose {
                                     logs_bloom: prefix_hex::decode("0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap(),
                                     logs,
                                 }),
-                                calls: vec![],
+                                calls,
                             }
                         })
                         .collect()
@@ -324,6 +433,7 @@ impl Firehose {
                 }),
                 log: None,
                 transaction: None,
+                trace: None,
             }),
             logs: None,
         };
