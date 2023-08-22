@@ -1,4 +1,6 @@
 use archive::Archive;
+use clap::Parser;
+use cli::Cli;
 use fetch::ArchiveFetch;
 use firehose::Firehose;
 use pbfirehose::{fetch_server::FetchServer, stream_server::StreamServer};
@@ -8,6 +10,7 @@ use tonic::transport::Server;
 use tracing::info;
 
 mod archive;
+mod cli;
 mod fetch;
 mod firehose;
 mod logger;
@@ -28,7 +31,9 @@ const FIREHOSE_DESCRIPTOR: &[u8] = tonic::include_file_descriptor_set!("firehose
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     logger::init();
 
-    let archive = Arc::new(Archive::new());
+    let args = Cli::parse();
+
+    let archive = Arc::new(Archive::new(args.archive));
     let firehose = Arc::new(Firehose::new(archive));
 
     let stream_service = StreamServer::new(ArchiveStream::new(firehose.clone()));

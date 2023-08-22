@@ -248,18 +248,19 @@ impl From<reqwest::Error> for Error {
 #[derive(Debug)]
 pub struct Archive {
     client: reqwest::Client,
+    url: String,
 }
 
 impl Archive {
-    pub fn new() -> Archive {
+    pub fn new(url: String) -> Archive {
         let client = reqwest::Client::new();
-        Archive { client }
+        Archive { client, url }
     }
 
     pub async fn height(&self) -> Result<u64, Error> {
         let response = self
             .client
-            .get("https://v2.archive.subsquid.io/network/ethereum-mainnet/height")
+            .get(format!("{}/height", self.url))
             .send()
             .await?;
 
@@ -298,10 +299,7 @@ impl Archive {
     pub async fn worker(&self, start_block: u64) -> Result<String, Error> {
         let response = self
             .client
-            .get(format!(
-                "https://v2.archive.subsquid.io/network/ethereum-mainnet/{}/worker",
-                start_block
-            ))
+            .get(format!("{}/{}/worker", self.url, start_block))
             .send()
             .await?;
 
