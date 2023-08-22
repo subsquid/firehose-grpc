@@ -5,10 +5,12 @@ use pbfirehose::{fetch_server::FetchServer, stream_server::StreamServer};
 use std::sync::Arc;
 use stream::ArchiveStream;
 use tonic::transport::Server;
+use tracing::info;
 
 mod archive;
 mod fetch;
 mod firehose;
+mod logger;
 mod stream;
 
 #[path = "protobuf/sf.firehose.v2.rs"]
@@ -24,6 +26,8 @@ const FIREHOSE_DESCRIPTOR: &[u8] = tonic::include_file_descriptor_set!("firehose
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    logger::init();
+
     let archive = Arc::new(Archive::new());
     let firehose = Arc::new(Firehose::new(archive));
 
@@ -33,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register_encoded_file_descriptor_set(FIREHOSE_DESCRIPTOR)
         .build()?;
 
+    info!("starting firehose-grpc at 0.0.0.0:13042");
     let addr = "0.0.0.0:13042".parse()?;
     Server::builder()
         .add_service(stream_service)

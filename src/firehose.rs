@@ -267,9 +267,13 @@ impl Firehose {
                                 ordinal: 0,
                             }).collect();
                             let calls = traces_by_tx.remove(&tx.transaction_index).unwrap_or_default().into_iter().filter_map(|trace| {
+                                let (action, result) = match trace.r#type {
+                                    TraceType::Create | TraceType::Call => (trace.action.unwrap(), trace.result),
+                                    TraceType::Suicide | TraceType::Reward => return None,
+                                };
                                 let call_type = match trace.r#type {
                                     TraceType::Create => 5,
-                                    TraceType::Call => match trace.call_type.unwrap() {
+                                    TraceType::Call => match action.r#type.unwrap() {
                                         CallType::Call => 1,
                                         CallType::Callcode => 2,
                                         CallType::Delegatecall => 3,
@@ -278,38 +282,38 @@ impl Firehose {
                                     TraceType::Suicide | TraceType::Reward => return None,
                                 };
                                 let caller = match trace.r#type {
-                                    TraceType::Create => trace.create_from.unwrap(),
-                                    TraceType::Call => trace.call_from.unwrap(),
+                                    TraceType::Create => action.from.unwrap(),
+                                    TraceType::Call => action.from.unwrap(),
                                     TraceType::Suicide | TraceType::Reward => return None,
                                 };
                                 let address = match trace.r#type {
-                                    TraceType::Create => trace.create_result_address.unwrap(),
-                                    TraceType::Call => trace.call_to.unwrap(),
+                                    TraceType::Create => result.clone().unwrap().address.unwrap(),
+                                    TraceType::Call => action.to.unwrap(),
                                     TraceType::Suicide | TraceType::Reward => return None,
                                 };
                                 let value = match trace.r#type {
-                                    TraceType::Create => trace.create_value.unwrap(),
-                                    TraceType::Call => trace.call_value.unwrap(),
+                                    TraceType::Create => action.value.unwrap(),
+                                    TraceType::Call => action.value.unwrap(),
                                     TraceType::Suicide | TraceType::Reward => return None,
                                 };
                                 let gas = match trace.r#type {
-                                    TraceType::Create => trace.create_gas.unwrap(),
-                                    TraceType::Call => trace.call_gas.unwrap(),
+                                    TraceType::Create => action.gas.unwrap(),
+                                    TraceType::Call => action.gas.unwrap(),
                                     TraceType::Suicide | TraceType::Reward => return None,
                                 };
                                 let gas_used = match trace.r#type {
-                                    TraceType::Create => trace.create_result_gas_used.unwrap(),
-                                    TraceType::Call => trace.call_result_gas_used.unwrap(),
+                                    TraceType::Create => result.clone().unwrap().gas_used.unwrap(),
+                                    TraceType::Call => if result.is_some() {result.clone().unwrap().gas_used.unwrap()} else {"0x0".to_string()},
                                     TraceType::Suicide | TraceType::Reward => return None,
                                 };
                                 let output = match trace.r#type {
                                     TraceType::Create => "0x".to_string(),
-                                    TraceType::Call => trace.call_result_output.unwrap(),
+                                    TraceType::Call => if result.is_some() {result.clone().unwrap().output.unwrap()} else {"0x".to_string()},
                                     TraceType::Suicide | TraceType::Reward => return None,
                                 };
                                 let input = match trace.r#type {
                                     TraceType::Create => "0x".to_string(),
-                                    TraceType::Call => trace.call_input.unwrap(),
+                                    TraceType::Call => action.input.unwrap(),
                                     TraceType::Suicide | TraceType::Reward => return None,
                                 };
                                 Some(pbcodec::Call {
@@ -320,8 +324,8 @@ impl Firehose {
                                     caller: vec_from_hex(&caller).unwrap(),
                                     address: vec_from_hex(&address).unwrap(),
                                     value: Some(pbcodec::BigInt { bytes: vec_from_hex(&value).unwrap() }),
-                                    gas_limit: gas.parse().unwrap(),
-                                    gas_consumed: gas_used.parse().unwrap(),
+                                    gas_limit: u64::from_str_radix(&gas.trim_start_matches("0x"), 16).unwrap(),
+                                    gas_consumed: u64::from_str_radix(&gas_used.trim_start_matches("0x"), 16).unwrap(),
                                     return_data: vec_from_hex(&output).unwrap(),
                                     input: vec_from_hex(&input).unwrap(),
                                     executed_code: false,
@@ -343,7 +347,7 @@ impl Firehose {
                                 })
                             }).collect();
                             pbcodec::TransactionTrace {
-                                to: prefix_hex::decode(tx.to.unwrap_or("0x".to_string())).unwrap(),
+                                to: prefix_hex::decode(tx.to.unwrap_or("0x0000000000000000000000000000000000000000".to_string())).unwrap(),
                                 nonce: tx.nonce,
                                 gas_price: Some(pbcodec::BigInt { bytes: vec_from_hex(&tx.gas_price).unwrap() }),
                                 gas_limit: u64::from_str_radix(&tx.gas.trim_start_matches("0x"), 16).unwrap(),

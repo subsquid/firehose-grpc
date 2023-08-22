@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -196,24 +197,32 @@ pub enum CallType {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct TraceAction {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub value: Option<String>,
+    pub gas: Option<String>,
+    pub input: Option<String>,
+    pub r#type: Option<CallType>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceResult {
+    pub gas_used: Option<String>,
+    pub address: Option<String>,
+    pub output: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct Trace {
     pub transaction_index: u32,
     pub r#type: TraceType,
     pub error: Option<String>,
     pub revert_reason: Option<String>,
-    pub create_from: Option<String>,
-    pub create_value: Option<String>,
-    pub create_gas: Option<String>,
-    pub create_result_gas_used: Option<String>,
-    pub create_result_address: Option<String>,
-    pub call_from: Option<String>,
-    pub call_to: Option<String>,
-    pub call_value: Option<String>,
-    pub call_gas: Option<String>,
-    pub call_input: Option<String>,
-    pub call_type: Option<CallType>,
-    pub call_result_gas_used: Option<String>,
-    pub call_result_output: Option<String>,
+    pub action: Option<TraceAction>,
+    pub result: Option<TraceResult>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -268,6 +277,7 @@ impl Archive {
     }
 
     pub async fn query(&self, request: &BatchRequest) -> Result<Vec<Block>, Error> {
+        debug!("archive query {:?}", request);
         let worker_url = self.worker(request.from_block).await?;
         let response = self.client.post(worker_url).json(&request).send().await?;
 
@@ -278,6 +288,7 @@ impl Archive {
         }
 
         let text = response.text().await?;
+        debug!("archive query result {}", text);
         serde_json::from_str(&text).map_err(|err| {
             dbg!(text);
             Error::Parse(err)
