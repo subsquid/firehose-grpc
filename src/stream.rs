@@ -3,6 +3,7 @@ use crate::pbfirehose::{stream_server::Stream, Request, Response};
 use futures_util::stream::StreamExt;
 use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
+use tracing::{debug, error};
 
 #[derive(Debug)]
 pub struct ArchiveStream {
@@ -29,15 +30,34 @@ impl Stream for ArchiveStream {
         let firehose = self.firehose.clone();
 
         tokio::spawn(async move {
-            let stream = firehose.blocks(request).await.unwrap();
+            let stream = match firehose.blocks(request).await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    error!("failed to establish block stream: {}", e);
+                    return;
+                }
+            };
+
+            debug!("block stream established successfully");
 
             tokio::pin!(stream);
 
-            while let Some(response) = stream.next().await {
-                if let Err(_) = tx.send(Ok(response)).await {
-                    break;
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(response) => {
+                        if let Err(e) = tx.send(Ok(response)).await {
+                            error!("block stream has closed unexpectedly: {}", e);
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        error!("error while streaming data: {}", e);
+                        return;
+                    }
                 }
             }
+
+            debug!("block stream finished");
         });
 
         Ok(tonic::Response::new(ReceiverStream::new(rx)))

@@ -6,7 +6,7 @@ use crate::pbcodec;
 use crate::pbfirehose::single_block_request::Reference;
 use crate::pbfirehose::{Request, Response, SingleBlockRequest, SingleBlockResponse};
 use crate::pbtransforms::CombinedFilter;
-use async_stream::stream;
+use async_stream::try_stream;
 use futures_core::stream::Stream;
 use prost::Message;
 use std::collections::HashMap;
@@ -43,7 +43,10 @@ impl Firehose {
         Firehose { archive }
     }
 
-    pub async fn blocks(&self, request: Request) -> Result<impl Stream<Item = Response>, ()> {
+    pub async fn blocks(
+        &self,
+        request: Request,
+    ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Response>>> {
         let mut fields = FieldSelection {
             block: Some(BlockFieldSelection {
                 base_fee_per_gas: true,
@@ -73,7 +76,7 @@ impl Firehose {
         let mut logs: Vec<LogRequest> = vec![];
 
         for transform in &request.transforms {
-            let filter = CombinedFilter::decode(&transform.value[..]).unwrap();
+            let filter = CombinedFilter::decode(&transform.value[..])?;
             for log_filter in filter.log_filters {
                 let log_request = LogRequest {
                     address: log_filter
@@ -163,16 +166,16 @@ impl Firehose {
         }
 
         let archive = self.archive.clone();
-        Ok(stream! {
+        Ok(try_stream! {
             'outer: loop {
-                let height = archive.height().await.unwrap();
+                let height = archive.height().await?;
 
                 if height <= req.from_block {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
 
-                let blocks = archive.query(&req).await.unwrap();
+                let blocks = archive.query(&req).await?;
                 let last_block_num = blocks[blocks.len() - 1].header.number;
                 for block in blocks {
                     let mut graph_block = pbcodec::Block {
@@ -404,7 +407,7 @@ impl Firehose {
         })
     }
 
-    pub async fn block(&self, request: SingleBlockRequest) -> Result<SingleBlockResponse, ()> {
+    pub async fn block(&self, request: SingleBlockRequest) -> anyhow::Result<SingleBlockResponse> {
         let block_num = match request.reference.as_ref().unwrap() {
             Reference::BlockNumber(block_number) => block_number.num,
             Reference::BlockHashAndNumber(block_hash_and_number) => block_hash_and_number.num,
@@ -441,7 +444,7 @@ impl Firehose {
             }),
             logs: None,
         };
-        let blocks = self.archive.query(&req).await.unwrap();
+        let blocks = self.archive.query(&req).await?;
         let block = blocks.into_iter().nth(0).unwrap();
         let graph_block = pbcodec::Block {
             ver: 2,

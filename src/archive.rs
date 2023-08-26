@@ -234,18 +234,6 @@ pub struct Block {
 }
 
 #[derive(Debug)]
-pub enum Error {
-    Http(reqwest::Error),
-    Parse(serde_json::Error),
-}
-
-impl From<reqwest::Error> for Error {
-    fn from(err: reqwest::Error) -> Self {
-        Error::Http(err)
-    }
-}
-
-#[derive(Debug)]
 pub struct Archive {
     client: reqwest::Client,
     url: String,
@@ -257,58 +245,52 @@ impl Archive {
         Archive { client, url }
     }
 
-    pub async fn height(&self) -> Result<u64, Error> {
+    pub async fn height(&self) -> anyhow::Result<u64> {
         let response = self
             .client
             .get(format!("{}/height", self.url))
             .send()
             .await?;
 
-        if let Err(err) = response.error_for_status_ref() {
+        if let Err(_) = response.error_for_status_ref() {
             let text = response.text().await?;
-            dbg!(text);
-            return Err(Error::Http(err));
+            anyhow::bail!("failed response from archive - {}", text);
         }
 
         let text = response.text().await?;
-        serde_json::from_str(&text).map_err(|err| {
-            dbg!(text);
-            Error::Parse(err)
-        })
+        debug!("archive height {}", text);
+        serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("serialization error - {}", e))
     }
 
-    pub async fn query(&self, request: &BatchRequest) -> Result<Vec<Block>, Error> {
+    pub async fn query(&self, request: &BatchRequest) -> anyhow::Result<Vec<Block>> {
         debug!("archive query {:?}", request);
         let worker_url = self.worker(request.from_block).await?;
         let response = self.client.post(worker_url).json(&request).send().await?;
 
-        if let Err(err) = response.error_for_status_ref() {
+        if let Err(_) = response.error_for_status_ref() {
             let text = response.text().await?;
-            dbg!(text);
-            return Err(Error::Http(err));
+            anyhow::bail!("failed response from archive - {}", text);
         }
 
         let text = response.text().await?;
         debug!("archive query result {}", text);
-        serde_json::from_str(&text).map_err(|err| {
-            dbg!(text);
-            Error::Parse(err)
-        })
+        serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("serialization error - {}", e))
     }
 
-    pub async fn worker(&self, start_block: u64) -> Result<String, Error> {
+    pub async fn worker(&self, start_block: u64) -> anyhow::Result<String> {
         let response = self
             .client
             .get(format!("{}/{}/worker", self.url, start_block))
             .send()
             .await?;
 
-        if let Err(err) = response.error_for_status_ref() {
+        if let Err(_) = response.error_for_status_ref() {
             let text = response.text().await?;
-            dbg!(text);
-            return Err(Error::Http(err));
+            anyhow::bail!("failed response from archive - {}", text);
         }
 
-        response.text().await.map_err(|err| Error::Http(err))
+        let worker_url = response.text().await?;
+        debug!("worker url {}", worker_url);
+        Ok(worker_url)
     }
 }
