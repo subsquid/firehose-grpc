@@ -78,7 +78,6 @@ pub struct TraceFieldSelection {
     pub transaction_index: bool,
     pub r#type: bool,
     pub error: bool,
-    pub revert_reason: bool,
     pub create_from: bool,
     pub create_value: bool,
     pub create_gas: bool,
@@ -220,6 +219,7 @@ pub struct Trace {
     pub transaction_index: u32,
     pub r#type: TraceType,
     pub error: Option<String>,
+    #[serde(default)]
     pub revert_reason: Option<String>,
     pub action: Option<TraceAction>,
     pub result: Option<TraceResult>,

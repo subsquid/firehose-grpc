@@ -1,22 +1,24 @@
-use crate::archive::{
-    Archive, BatchRequest, BlockFieldSelection, CallType, FieldSelection, Log, LogFieldSelection,
-    LogRequest, Trace, TraceFieldSelection, TraceType, TxFieldSelection,
-};
+use crate::datasource::{CallType, DataRequest, DataSource, Log, LogRequest, Trace, TraceType};
+use crate::ds_archive::ArchiveDataSource;
 use crate::pbcodec;
 use crate::pbfirehose::single_block_request::Reference;
-use crate::pbfirehose::{Request, Response, SingleBlockRequest, SingleBlockResponse};
+use crate::pbfirehose::{ForkStep, Request, Response, SingleBlockRequest, SingleBlockResponse};
 use crate::pbtransforms::CombinedFilter;
 use async_stream::try_stream;
 use futures_core::stream::Stream;
+use futures_util::stream::StreamExt;
 use prost::Message;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
-async fn resolve_negative_start_block_num(start_block_num: i64, archive: &Archive) -> u64 {
+async fn resolve_negative_start_block_num(
+    start_block_num: i64,
+    archive: &ArchiveDataSource,
+) -> u64 {
     if start_block_num < 0 {
         let delta = u64::try_from(start_block_num.abs()).unwrap();
-        let head = archive.height().await.unwrap();
+        let head = archive.get_finalized_height().await.unwrap();
         return head.saturating_sub(delta);
     }
     u64::try_from(start_block_num).unwrap()
@@ -35,11 +37,11 @@ fn vec_from_hex(value: &str) -> Result<Vec<u8>, prefix_hex::Error> {
 
 #[derive(Debug)]
 pub struct Firehose {
-    archive: Arc<Archive>,
+    archive: Arc<ArchiveDataSource>,
 }
 
 impl Firehose {
-    pub fn new(archive: Arc<Archive>) -> Firehose {
+    pub fn new(archive: Arc<ArchiveDataSource>) -> Firehose {
         Firehose { archive }
     }
 
@@ -47,34 +49,16 @@ impl Firehose {
         &self,
         request: Request,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Response>>> {
-        let mut fields = FieldSelection {
-            block: Some(BlockFieldSelection {
-                base_fee_per_gas: true,
-                difficulty: true,
-                total_difficulty: true,
-                extra_data: true,
-                gas_limit: true,
-                gas_used: true,
-                hash: true,
-                logs_bloom: true,
-                miner: true,
-                mix_hash: true,
-                nonce: true,
-                number: true,
-                parent_hash: true,
-                receipts_root: true,
-                sha3_uncles: true,
-                size: true,
-                state_root: true,
-                timestamp: true,
-                transactions_root: true,
-            }),
-            log: None,
-            transaction: None,
-            trace: None,
+        // TODO: pass rpc endpoint instead of archive
+        let from_block =
+            resolve_negative_start_block_num(request.start_block_num, &self.archive).await;
+        let to_block = if from_block != request.stop_block_num && request.stop_block_num == 0 {
+            None
+        } else {
+            Some(request.stop_block_num)
         };
-        let mut logs: Vec<LogRequest> = vec![];
 
+        let mut logs: Vec<LogRequest> = vec![];
         for transform in &request.transforms {
             let filter = CombinedFilter::decode(&transform.value[..])?;
             for log_filter in filter.log_filters {
@@ -89,153 +73,85 @@ impl Firehose {
                         .into_iter()
                         .map(|signature| prefix_hex::encode(signature))
                         .collect(),
-                    topic1: vec![],
-                    topic2: vec![],
-                    topic3: vec![],
-                    transaction: true,
-                    transaction_traces: true,
                 };
                 logs.push(log_request);
-                fields.log = Some(LogFieldSelection {
-                    address: true,
-                    data: true,
-                    log_index: true,
-                    topics: true,
-                    transaction_index: true,
-                });
-                fields.transaction = Some(TxFieldSelection {
-                    cumulative_gas_used: true,
-                    effective_gas_price: true,
-                    from: true,
-                    gas: true,
-                    gas_price: true,
-                    gas_used: true,
-                    input: true,
-                    max_fee_per_gas: true,
-                    max_priority_fee_per_gas: true,
-                    nonce: true,
-                    r: true,
-                    s: true,
-                    hash: true,
-                    status: true,
-                    to: true,
-                    transaction_index: true,
-                    r#type: true,
-                    v: true,
-                    value: true,
-                    y_parity: true,
-                });
-                fields.trace = Some(TraceFieldSelection {
-                    transaction_index: true,
-                    r#type: true,
-                    revert_reason: true,
-                    error: true,
-                    create_from: true,
-                    create_value: true,
-                    create_gas: true,
-                    create_result_gas_used: true,
-                    create_result_address: true,
-                    call_from: true,
-                    call_to: true,
-                    call_value: true,
-                    call_gas: true,
-                    call_input: true,
-                    call_type: true,
-                    call_result_gas_used: true,
-                    call_result_output: true,
-                });
             }
         }
 
-        let from_block =
-            resolve_negative_start_block_num(request.start_block_num, &self.archive).await;
-        let to_block = if from_block != request.stop_block_num && request.stop_block_num == 0 {
-            None
-        } else {
-            Some(request.stop_block_num)
+        let req = DataRequest {
+            from: from_block,
+            to: to_block,
+            logs,
+            transactions: vec![],
         };
-        let mut req = BatchRequest {
-            from_block,
-            to_block,
-            fields: Some(fields),
-            logs: None,
-        };
-
-        if !logs.is_empty() {
-            req.logs = Some(logs);
-        }
+        dbg!(&req);
 
         let archive = self.archive.clone();
+
         Ok(try_stream! {
-            'outer: loop {
-                let height = archive.height().await?;
-
-                if height <= req.from_block {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    continue;
-                }
-
-                let blocks = archive.query(&req).await?;
-                let last_block_num = blocks[blocks.len() - 1].header.number;
-                for block in blocks {
-                    let mut graph_block = pbcodec::Block {
-                        ver: 2,
-                        hash: prefix_hex::decode(block.header.hash.clone()).unwrap(),
-                        number: block.header.number,
-                        size: block.header.size,
-                        header: Some(pbcodec::BlockHeader {
-                            parent_hash: prefix_hex::decode(block.header.parent_hash).unwrap(),
-                            uncle_hash: prefix_hex::decode(block.header.sha3_uncles).unwrap(),
-                            coinbase: prefix_hex::decode(block.header.miner).unwrap(),
-                            state_root: prefix_hex::decode(block.header.state_root).unwrap(),
-                            transactions_root: prefix_hex::decode(block.header.transactions_root)
-                                .unwrap(),
-                            receipt_root: prefix_hex::decode(block.header.receipts_root).unwrap(),
-                            logs_bloom: prefix_hex::decode(block.header.logs_bloom).unwrap(),
-                            difficulty: Some(pbcodec::BigInt {
-                                bytes: vec_from_hex(&block.header.difficulty).unwrap(),
-                            }),
-                            total_difficulty: Some(pbcodec::BigInt {
-                                bytes: vec_from_hex(&block.header.total_difficulty).unwrap(),
-                            }),
+            let archive_height = archive.get_finalized_height().await?;
+            if from_block < archive_height {
+                let mut stream = Pin::from(archive.get_finalized_blocks(req)?);
+                while let Some(result) = stream.next().await {
+                    let blocks = result?;
+                    for block in blocks {
+                        let mut graph_block = pbcodec::Block {
+                            ver: 2,
+                            hash: prefix_hex::decode(block.header.hash.clone()).unwrap(),
                             number: block.header.number,
-                            gas_limit: u64::from_str_radix(
-                                &block.header.gas_limit.trim_start_matches("0x"),
-                                16,
-                            )
-                            .unwrap(),
-                            gas_used: u64::from_str_radix(
-                                &block.header.gas_used.trim_start_matches("0x"),
-                                16,
-                            )
-                            .unwrap(),
-                            timestamp: Some(prost_types::Timestamp {
-                                seconds: i64::try_from(block.header.timestamp).unwrap(),
-                                nanos: 0,
+                            size: block.header.size,
+                            header: Some(pbcodec::BlockHeader {
+                                parent_hash: prefix_hex::decode(block.header.parent_hash).unwrap(),
+                                uncle_hash: prefix_hex::decode(block.header.sha3_uncles).unwrap(),
+                                coinbase: prefix_hex::decode(block.header.miner).unwrap(),
+                                state_root: prefix_hex::decode(block.header.state_root).unwrap(),
+                                transactions_root: prefix_hex::decode(block.header.transactions_root)
+                                    .unwrap(),
+                                receipt_root: prefix_hex::decode(block.header.receipts_root).unwrap(),
+                                logs_bloom: prefix_hex::decode(block.header.logs_bloom).unwrap(),
+                                difficulty: Some(pbcodec::BigInt {
+                                    bytes: vec_from_hex(&block.header.difficulty).unwrap(),
+                                }),
+                                total_difficulty: Some(pbcodec::BigInt {
+                                    bytes: vec_from_hex(&block.header.total_difficulty).unwrap(),
+                                }),
+                                number: block.header.number,
+                                gas_limit: u64::from_str_radix(
+                                    &block.header.gas_limit.trim_start_matches("0x"),
+                                    16,
+                                )
+                                .unwrap(),
+                                gas_used: u64::from_str_radix(
+                                    &block.header.gas_used.trim_start_matches("0x"),
+                                    16,
+                                )
+                                .unwrap(),
+                                timestamp: Some(prost_types::Timestamp {
+                                    seconds: i64::try_from(block.header.timestamp).unwrap(),
+                                    nanos: 0,
+                                }),
+                                extra_data: prefix_hex::decode(block.header.extra_data).unwrap(),
+                                mix_hash: prefix_hex::decode(block.header.mix_hash).unwrap(),
+                                nonce: u64::from_str_radix(
+                                    &block.header.nonce.trim_start_matches("0x"),
+                                    16,
+                                )
+                                .unwrap(),
+                                hash: prefix_hex::decode(block.header.hash).unwrap(),
+                                base_fee_per_gas: block.header.base_fee_per_gas.and_then(|val| {
+                                    Some(pbcodec::BigInt {
+                                        bytes: vec_from_hex(&val).unwrap(),
+                                    })
+                                }),
                             }),
-                            extra_data: prefix_hex::decode(block.header.extra_data).unwrap(),
-                            mix_hash: prefix_hex::decode(block.header.mix_hash).unwrap(),
-                            nonce: u64::from_str_radix(
-                                &block.header.nonce.trim_start_matches("0x"),
-                                16,
-                            )
-                            .unwrap(),
-                            hash: prefix_hex::decode(block.header.hash).unwrap(),
-                            base_fee_per_gas: block.header.base_fee_per_gas.and_then(|val| {
-                                Some(pbcodec::BigInt {
-                                    bytes: vec_from_hex(&val).unwrap(),
-                                })
-                            }),
-                        }),
-                        uncles: vec![],
-                        transaction_traces: vec![],
-                        balance_changes: vec![],
-                        code_changes: vec![],
-                    };
+                            uncles: vec![],
+                            transaction_traces: vec![],
+                            balance_changes: vec![],
+                            code_changes: vec![],
+                        };
 
-                    let mut logs_by_tx: HashMap<u32, Vec<Log>> = HashMap::new();
-                    if let Some(logs) = block.logs {
-                        for log in logs {
+                        let mut logs_by_tx: HashMap<u32, Vec<Log>> = HashMap::new();
+                        for log in block.logs {
                             if logs_by_tx.contains_key(&log.transaction_index) {
                                 logs_by_tx.get_mut(&log.transaction_index)
                                     .unwrap()
@@ -244,11 +160,9 @@ impl Firehose {
                                 logs_by_tx.insert(log.transaction_index, vec![log]);
                             }
                         }
-                    }
 
-                    let mut traces_by_tx: HashMap<u32, Vec<Trace>> = HashMap::new();
-                    if let Some(traces) = block.traces {
-                        for trace in traces {
+                        let mut traces_by_tx: HashMap<u32, Vec<Trace>> = HashMap::new();
+                        for trace in block.traces {
                             if traces_by_tx.contains_key(&trace.transaction_index) {
                                 traces_by_tx.get_mut(&trace.transaction_index)
                                     .unwrap()
@@ -257,10 +171,8 @@ impl Firehose {
                                 traces_by_tx.insert(trace.transaction_index, vec![trace]);
                             }
                         }
-                    }
 
-                    if let Some(transactions) = block.transactions {
-                        graph_block.transaction_traces = transactions.into_iter().map(|tx| {
+                        graph_block.transaction_traces = block.transactions.into_iter().map(|tx| {
                             let logs = logs_by_tx.remove(&tx.transaction_index).unwrap_or_default().into_iter().map(|log| pbcodec::Log {
                                 address: prefix_hex::decode(log.address).unwrap(),
                                 data: prefix_hex::decode(log.data).unwrap(),
@@ -383,26 +295,18 @@ impl Firehose {
                                 calls,
                             }
                         })
-                        .collect()
-                    }
+                        .collect();
 
-                    yield Response {
-                        block: Some(prost_types::Any {
-                            type_url: "type.googleapis.com/sf.ethereum.type.v2.Block".to_string(),
-                            value: graph_block.encode_to_vec(),
-                        }),
-                        step: 1,
-                        cursor: graph_block.number.to_string(),
-                    };
-                }
-
-                if let Some(to_block) = to_block {
-                    if last_block_num == to_block {
-                        break 'outer;
+                        yield Response {
+                            block: Some(prost_types::Any {
+                                type_url: "type.googleapis.com/sf.ethereum.type.v2.Block".to_string(),
+                                value: graph_block.encode_to_vec(),
+                            }),
+                            step: ForkStep::StepNew.into(),
+                            cursor: graph_block.number.to_string(),
+                        };
                     }
                 }
-
-                req.from_block = last_block_num + 1;
             }
         })
     }
@@ -413,39 +317,18 @@ impl Firehose {
             Reference::BlockHashAndNumber(block_hash_and_number) => block_hash_and_number.num,
             Reference::Cursor(cursor) => cursor.cursor.parse().unwrap(),
         };
-        let req = BatchRequest {
-            from_block: block_num,
-            to_block: Some(block_num),
-            fields: Some(FieldSelection {
-                block: Some(BlockFieldSelection {
-                    base_fee_per_gas: true,
-                    difficulty: true,
-                    total_difficulty: true,
-                    extra_data: true,
-                    gas_limit: true,
-                    gas_used: true,
-                    hash: true,
-                    logs_bloom: true,
-                    miner: true,
-                    mix_hash: true,
-                    nonce: true,
-                    number: true,
-                    parent_hash: true,
-                    receipts_root: true,
-                    sha3_uncles: true,
-                    size: true,
-                    state_root: true,
-                    timestamp: true,
-                    transactions_root: true,
-                }),
-                log: None,
-                transaction: None,
-                trace: None,
-            }),
-            logs: None,
+
+        let req = DataRequest {
+            from: block_num,
+            to: Some(block_num),
+            logs: vec![],
+            transactions: vec![],
         };
-        let blocks = self.archive.query(&req).await?;
+
+        let mut stream = Pin::from(self.archive.get_finalized_blocks(req)?);
+        let blocks = stream.next().await.unwrap()?;
         let block = blocks.into_iter().nth(0).unwrap();
+
         let graph_block = pbcodec::Block {
             ver: 2,
             hash: prefix_hex::decode(block.header.hash.clone()).unwrap(),
