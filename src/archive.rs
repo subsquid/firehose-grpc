@@ -1,3 +1,4 @@
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -235,13 +236,13 @@ pub struct Block {
 
 #[derive(Debug)]
 pub struct Archive {
-    client: reqwest::Client,
+    client: Client,
     url: String,
 }
 
 impl Archive {
     pub fn new(url: String) -> Archive {
-        let client = reqwest::Client::new();
+        let client = Client::new();
         Archive { client, url }
     }
 

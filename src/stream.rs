@@ -5,7 +5,6 @@ use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error};
 
-#[derive(Debug)]
 pub struct ArchiveStream {
     firehose: Arc<Firehose>,
 }

@@ -1,5 +1,4 @@
 use crate::datasource::{CallType, DataRequest, DataSource, Log, LogRequest, Trace, TraceType};
-use crate::ds_archive::ArchiveDataSource;
 use crate::pbcodec;
 use crate::pbfirehose::single_block_request::Reference;
 use crate::pbfirehose::{ForkStep, Request, Response, SingleBlockRequest, SingleBlockResponse};
@@ -12,9 +11,9 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-async fn resolve_negative_start_block_num(
+async fn resolve_negative_start(
     start_block_num: i64,
-    archive: &ArchiveDataSource,
+    archive: &Arc<dyn DataSource + Send + Sync>,
 ) -> u64 {
     if start_block_num < 0 {
         let delta = u64::try_from(start_block_num.abs()).unwrap();
@@ -35,23 +34,24 @@ fn vec_from_hex(value: &str) -> Result<Vec<u8>, prefix_hex::Error> {
     Ok(buf)
 }
 
-#[derive(Debug)]
 pub struct Firehose {
-    archive: Arc<ArchiveDataSource>,
+    archive: Arc<dyn DataSource + Sync + Send>,
+    rpc: Arc<dyn DataSource + Sync + Send>,
 }
 
 impl Firehose {
-    pub fn new(archive: Arc<ArchiveDataSource>) -> Firehose {
-        Firehose { archive }
+    pub fn new(
+        archive: Arc<dyn DataSource + Sync + Send>,
+        rpc: Arc<dyn DataSource + Sync + Send>,
+    ) -> Firehose {
+        Firehose { archive, rpc }
     }
 
     pub async fn blocks(
         &self,
         request: Request,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Response>>> {
-        // TODO: pass rpc endpoint instead of archive
-        let from_block =
-            resolve_negative_start_block_num(request.start_block_num, &self.archive).await;
+        let from_block = resolve_negative_start(request.start_block_num, &self.rpc).await;
         let to_block = if from_block != request.stop_block_num && request.stop_block_num == 0 {
             None
         } else {
@@ -84,7 +84,6 @@ impl Firehose {
             logs,
             transactions: vec![],
         };
-        dbg!(&req);
 
         let archive = self.archive.clone();
 

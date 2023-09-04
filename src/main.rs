@@ -2,6 +2,7 @@ use archive::Archive;
 use clap::Parser;
 use cli::Cli;
 use ds_archive::ArchiveDataSource;
+use ds_rpc::RpcDataSource;
 use fetch::ArchiveFetch;
 use firehose::Firehose;
 use pbfirehose::{fetch_server::FetchServer, stream_server::StreamServer};
@@ -39,7 +40,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let archive = Arc::new(Archive::new(args.archive));
     let archive_ds = Arc::new(ArchiveDataSource::new(archive));
-    let firehose = Arc::new(Firehose::new(archive_ds));
+    let rpc_ds = Arc::new(RpcDataSource::new(args.rpc, 30));
+    let firehose = Arc::new(Firehose::new(archive_ds, rpc_ds));
 
     let stream_service = StreamServer::new(ArchiveStream::new(firehose.clone()));
     let fetch_service = FetchServer::new(ArchiveFetch::new(firehose));
