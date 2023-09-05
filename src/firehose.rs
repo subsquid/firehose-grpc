@@ -1,4 +1,6 @@
-use crate::datasource::{CallType, DataRequest, DataSource, Log, LogRequest, Trace, TraceType};
+use crate::datasource::{
+    BlockHeader, CallType, DataRequest, DataSource, Log, LogRequest, Trace, TraceType,
+};
 use crate::pbcodec;
 use crate::pbfirehose::single_block_request::Reference;
 use crate::pbfirehose::{ForkStep, Request, Response, SingleBlockRequest, SingleBlockResponse};
@@ -32,6 +34,10 @@ fn vec_from_hex(value: &str) -> Result<Vec<u8>, prefix_hex::Error> {
     };
 
     Ok(buf)
+}
+
+fn qty2int(value: String) -> anyhow::Result<u64> {
+    Ok(u64::from_str_radix(&value.trim_start_matches("0x"), 16)?)
 }
 
 pub struct Firehose {
@@ -99,50 +105,7 @@ impl Firehose {
                             hash: prefix_hex::decode(block.header.hash.clone()).unwrap(),
                             number: block.header.number,
                             size: block.header.size,
-                            header: Some(pbcodec::BlockHeader {
-                                parent_hash: prefix_hex::decode(block.header.parent_hash).unwrap(),
-                                uncle_hash: prefix_hex::decode(block.header.sha3_uncles).unwrap(),
-                                coinbase: prefix_hex::decode(block.header.miner).unwrap(),
-                                state_root: prefix_hex::decode(block.header.state_root).unwrap(),
-                                transactions_root: prefix_hex::decode(block.header.transactions_root)
-                                    .unwrap(),
-                                receipt_root: prefix_hex::decode(block.header.receipts_root).unwrap(),
-                                logs_bloom: prefix_hex::decode(block.header.logs_bloom).unwrap(),
-                                difficulty: Some(pbcodec::BigInt {
-                                    bytes: vec_from_hex(&block.header.difficulty).unwrap(),
-                                }),
-                                total_difficulty: Some(pbcodec::BigInt {
-                                    bytes: vec_from_hex(&block.header.total_difficulty).unwrap(),
-                                }),
-                                number: block.header.number,
-                                gas_limit: u64::from_str_radix(
-                                    &block.header.gas_limit.trim_start_matches("0x"),
-                                    16,
-                                )
-                                .unwrap(),
-                                gas_used: u64::from_str_radix(
-                                    &block.header.gas_used.trim_start_matches("0x"),
-                                    16,
-                                )
-                                .unwrap(),
-                                timestamp: Some(prost_types::Timestamp {
-                                    seconds: i64::try_from(block.header.timestamp).unwrap(),
-                                    nanos: 0,
-                                }),
-                                extra_data: prefix_hex::decode(block.header.extra_data).unwrap(),
-                                mix_hash: prefix_hex::decode(block.header.mix_hash).unwrap(),
-                                nonce: u64::from_str_radix(
-                                    &block.header.nonce.trim_start_matches("0x"),
-                                    16,
-                                )
-                                .unwrap(),
-                                hash: prefix_hex::decode(block.header.hash).unwrap(),
-                                base_fee_per_gas: block.header.base_fee_per_gas.and_then(|val| {
-                                    Some(pbcodec::BigInt {
-                                        bytes: vec_from_hex(&val).unwrap(),
-                                    })
-                                }),
-                            }),
+                            header: Some(pbcodec::BlockHeader::try_from(block.header)?),
                             uncles: vec![],
                             transaction_traces: vec![],
                             balance_changes: vec![],
@@ -333,43 +296,7 @@ impl Firehose {
             hash: prefix_hex::decode(block.header.hash.clone()).unwrap(),
             number: block.header.number,
             size: block.header.size,
-            header: Some(pbcodec::BlockHeader {
-                parent_hash: prefix_hex::decode(block.header.parent_hash).unwrap(),
-                uncle_hash: prefix_hex::decode(block.header.sha3_uncles).unwrap(),
-                coinbase: prefix_hex::decode(block.header.miner).unwrap(),
-                state_root: prefix_hex::decode(block.header.state_root).unwrap(),
-                transactions_root: prefix_hex::decode(block.header.transactions_root).unwrap(),
-                receipt_root: prefix_hex::decode(block.header.receipts_root).unwrap(),
-                logs_bloom: prefix_hex::decode(block.header.logs_bloom).unwrap(),
-                difficulty: Some(pbcodec::BigInt {
-                    bytes: vec_from_hex(&block.header.difficulty).unwrap(),
-                }),
-                total_difficulty: Some(pbcodec::BigInt {
-                    bytes: vec_from_hex(&block.header.total_difficulty).unwrap(),
-                }),
-                number: block.header.number,
-                gas_limit: u64::from_str_radix(
-                    &block.header.gas_limit.trim_start_matches("0x"),
-                    16,
-                )
-                .unwrap(),
-                gas_used: u64::from_str_radix(&block.header.gas_used.trim_start_matches("0x"), 16)
-                    .unwrap(),
-                timestamp: Some(prost_types::Timestamp {
-                    seconds: i64::try_from(block.header.timestamp).unwrap(),
-                    nanos: 0,
-                }),
-                extra_data: prefix_hex::decode(block.header.extra_data).unwrap(),
-                mix_hash: prefix_hex::decode(block.header.mix_hash).unwrap(),
-                nonce: u64::from_str_radix(&block.header.nonce.trim_start_matches("0x"), 16)
-                    .unwrap(),
-                hash: prefix_hex::decode(block.header.hash).unwrap(),
-                base_fee_per_gas: block.header.base_fee_per_gas.and_then(|val| {
-                    Some(pbcodec::BigInt {
-                        bytes: vec_from_hex(&val).unwrap(),
-                    })
-                }),
-            }),
+            header: Some(pbcodec::BlockHeader::try_from(block.header)?),
             uncles: vec![],
             transaction_traces: vec![],
             balance_changes: vec![],
@@ -381,6 +308,47 @@ impl Firehose {
                 type_url: "type.googleapis.com/sf.ethereum.type.v2.Block".to_string(),
                 value: graph_block.encode_to_vec(),
             }),
+        })
+    }
+}
+
+impl TryFrom<BlockHeader> for pbcodec::BlockHeader {
+    type Error = anyhow::Error;
+
+    fn try_from(value: BlockHeader) -> anyhow::Result<Self, Self::Error> {
+        Ok(pbcodec::BlockHeader {
+            parent_hash: prefix_hex::decode(value.parent_hash)?,
+            uncle_hash: prefix_hex::decode(value.sha3_uncles)?,
+            coinbase: prefix_hex::decode(value.miner)?,
+            state_root: prefix_hex::decode(value.state_root)?,
+            transactions_root: prefix_hex::decode(value.transactions_root)?,
+            receipt_root: prefix_hex::decode(value.receipts_root)?,
+            logs_bloom: prefix_hex::decode(value.logs_bloom)?,
+            difficulty: Some(pbcodec::BigInt {
+                bytes: vec_from_hex(&value.difficulty)?,
+            }),
+            total_difficulty: Some(pbcodec::BigInt {
+                bytes: vec_from_hex(&value.total_difficulty)?,
+            }),
+            number: value.number,
+            gas_limit: qty2int(value.gas_limit)?,
+            gas_used: qty2int(value.gas_used)?,
+            timestamp: Some(prost_types::Timestamp {
+                seconds: i64::try_from(value.timestamp)?,
+                nanos: 0,
+            }),
+            extra_data: prefix_hex::decode(value.extra_data)?,
+            mix_hash: prefix_hex::decode(value.mix_hash)?,
+            nonce: qty2int(value.nonce)?,
+            hash: prefix_hex::decode(value.hash)?,
+            base_fee_per_gas: value.base_fee_per_gas.map_or::<anyhow::Result<_>, _>(
+                Ok(None),
+                |val| {
+                    Ok(Some(pbcodec::BigInt {
+                        bytes: vec_from_hex(&val)?,
+                    }))
+                },
+            )?,
         })
     }
 }
