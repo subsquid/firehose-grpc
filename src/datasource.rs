@@ -1,15 +1,15 @@
 use futures_core::stream::Stream;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LogRequest {
     pub address: Vec<String>,
     pub topic0: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TransactionRequest {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataRequest {
     pub from: u64,
     pub to: Option<u64>,
