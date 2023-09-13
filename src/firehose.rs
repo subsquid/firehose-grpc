@@ -1,11 +1,12 @@
 use crate::datasource::{
-    Block, BlockHeader, CallType, DataRequest, DataSource, Log, LogRequest, Trace, TraceType,
-    Transaction,
+    Block, BlockHeader, CallType, DataRequest, DataSource, HashAndHeight, HotDataSource, Log,
+    LogRequest, Trace, TraceType, Transaction,
 };
 use crate::pbcodec;
 use crate::pbfirehose::single_block_request::Reference;
 use crate::pbfirehose::{ForkStep, Request, Response, SingleBlockRequest, SingleBlockResponse};
 use crate::pbtransforms::CombinedFilter;
+use anyhow::Context;
 use async_stream::try_stream;
 use futures_core::stream::Stream;
 use futures_util::stream::StreamExt;
@@ -16,14 +17,14 @@ use std::sync::Arc;
 
 async fn resolve_negative_start(
     start_block_num: i64,
-    archive: &Arc<dyn DataSource + Send + Sync>,
-) -> u64 {
+    archive: &(dyn DataSource + Send + Sync),
+) -> anyhow::Result<u64> {
     if start_block_num < 0 {
-        let delta = u64::try_from(start_block_num.abs()).unwrap();
-        let head = archive.get_finalized_height().await.unwrap();
-        return head.saturating_sub(delta);
+        let delta = u64::try_from(start_block_num.abs())?;
+        let head = archive.get_finalized_height().await?;
+        return Ok(head.saturating_sub(delta));
     }
-    u64::try_from(start_block_num).unwrap()
+    Ok(u64::try_from(start_block_num)?)
 }
 
 fn vec_from_hex(value: &str) -> Result<Vec<u8>, prefix_hex::Error> {
@@ -43,13 +44,13 @@ fn qty2int(value: &String) -> anyhow::Result<u64> {
 
 pub struct Firehose {
     archive: Arc<dyn DataSource + Sync + Send>,
-    rpc: Arc<dyn DataSource + Sync + Send>,
+    rpc: Arc<dyn HotDataSource + Sync + Send>,
 }
 
 impl Firehose {
     pub fn new(
         archive: Arc<dyn DataSource + Sync + Send>,
-        rpc: Arc<dyn DataSource + Sync + Send>,
+        rpc: Arc<dyn HotDataSource + Sync + Send>,
     ) -> Firehose {
         Firehose { archive, rpc }
     }
@@ -58,7 +59,7 @@ impl Firehose {
         &self,
         request: Request,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Response>>> {
-        let from_block = resolve_negative_start(request.start_block_num, &self.rpc).await;
+        let from_block = resolve_negative_start(request.start_block_num, self.rpc.as_ds()).await?;
         let to_block = if from_block != request.stop_block_num && request.stop_block_num == 0 {
             None
         } else {
@@ -89,10 +90,11 @@ impl Firehose {
         let rpc = self.rpc.clone();
 
         Ok(try_stream! {
-            let mut state = from_block;
+            let mut state = None;
+            let mut from_block = from_block;
 
             let archive_height = archive.get_finalized_height().await?;
-            if state < archive_height {
+            if from_block < archive_height {
                 let req = DataRequest {
                     from: from_block,
                     to: to_block,
@@ -103,9 +105,13 @@ impl Firehose {
                 while let Some(result) = stream.next().await {
                     let blocks = result?;
                     for block in blocks {
-                        let graph_block = pbcodec::Block::try_from(block)?;
+                        state = Some(HashAndHeight {
+                            hash: block.header.hash.clone(),
+                            height: block.header.number,
+                        });
+                        from_block = block.header.number + 1;
 
-                        state = graph_block.number;
+                        let graph_block = pbcodec::Block::try_from(block)?;
 
                         yield Response {
                             block: Some(prost_types::Any {
@@ -120,11 +126,16 @@ impl Firehose {
             }
 
             let rpc_height = rpc.get_finalized_height().await?;
-            if state < rpc_height {
+            if from_block < rpc_height {
+                let to = if let Some(to_block) = to_block {
+                    std::cmp::min(to_block, rpc_height)
+                } else {
+                    rpc_height
+                };
                 let req = DataRequest {
-                    from: state,
-                    to: to_block,
-                    logs,
+                    from: from_block,
+                    to: Some(to),
+                    logs: logs.clone(),
                     transactions: vec![],
                 };
                 let mut stream = Pin::from(rpc.get_finalized_blocks(req)?);
@@ -132,8 +143,6 @@ impl Firehose {
                     let blocks = result?;
                     for block in blocks {
                         let graph_block = pbcodec::Block::try_from(block)?;
-
-                        state = graph_block.number;
 
                         yield Response {
                             block: Some(prost_types::Any {
@@ -145,6 +154,67 @@ impl Firehose {
                         };
                     }
                 }
+                state = Some(HashAndHeight {
+                    hash: rpc.get_block_hash(to).await?,
+                    height: to,
+                });
+                from_block = to + 1;
+            }
+
+            let req = DataRequest {
+                from: from_block,
+                to: to_block,
+                logs,
+                transactions: vec![],
+            };
+            let state = state.context("state isn't expected to be None")?;
+            let mut last_head = state.clone();
+            let mut stream = Pin::from(rpc.get_hot_blocks(req, state)?);
+            while let Some(result) = stream.next().await {
+                let upd = result?;
+
+                let new_head = if upd.blocks.is_empty() {
+                    upd.base_head.clone()
+                } else {
+                    let header = &upd.blocks.last().unwrap().header;
+                    HashAndHeight {
+                        hash: header.hash.clone(),
+                        height: header.number,
+                    }
+                };
+
+                if upd.base_head != last_head {
+                    // fork happened
+                    // only number and parent_hash are required for ForkStep::StepUndo
+                    let mut graph_block = pbcodec::Block::default();
+                    let mut header = pbcodec::BlockHeader::default();
+                    header.number = last_head.height;
+                    header.parent_hash = prefix_hex::decode(upd.base_head.hash)?;
+                    graph_block.header = Some(header);
+
+                    yield Response {
+                        block: Some(prost_types::Any {
+                            type_url: "type.googleapis.com/sf.ethereum.type.v2.Block".to_string(),
+                            value: graph_block.encode_to_vec(),
+                        }),
+                        step: ForkStep::StepUndo.into(),
+                        cursor: last_head.height.to_string(),
+                    };
+                }
+
+                for block in upd.blocks {
+                    let graph_block = pbcodec::Block::try_from(block)?;
+                    yield Response {
+                        block: Some(prost_types::Any {
+                            type_url: "type.googleapis.com/sf.ethereum.type.v2.Block".to_string(),
+                            value: graph_block.encode_to_vec(),
+                        }),
+                        step: ForkStep::StepNew.into(),
+                        cursor: graph_block.number.to_string(),
+                    }
+                }
+
+                last_head = new_head;
             }
         })
     }

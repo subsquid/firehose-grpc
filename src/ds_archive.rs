@@ -154,6 +154,10 @@ impl DataSource for ArchiveDataSource {
     async fn get_finalized_height(&self) -> anyhow::Result<u64> {
         self.archive.height().await
     }
+
+    async fn get_block_hash(&self, _height: u64) -> anyhow::Result<String> {
+        todo!()
+    }
 }
 
 impl From<archive::BlockHeader> for BlockHeader {

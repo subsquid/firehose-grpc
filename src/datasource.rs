@@ -116,10 +116,36 @@ pub struct Block {
     pub traces: Vec<Trace>,
 }
 
+#[derive(Clone, PartialEq)]
+pub struct HashAndHeight {
+    pub hash: String,
+    pub height: u64,
+}
+
+pub struct HotUpdate {
+    pub blocks: Vec<Block>,
+    pub base_head: HashAndHeight,
+}
+
 pub type BlockStream = Box<dyn Stream<Item = anyhow::Result<Vec<Block>>> + Send>;
+
+pub type HotBlockStream = Box<dyn Stream<Item = anyhow::Result<HotUpdate>> + Send>;
 
 #[async_trait::async_trait]
 pub trait DataSource {
     fn get_finalized_blocks(&self, request: DataRequest) -> anyhow::Result<BlockStream>;
     async fn get_finalized_height(&self) -> anyhow::Result<u64>;
+    async fn get_block_hash(&self, height: u64) -> anyhow::Result<String>;
 }
+
+#[async_trait::async_trait]
+pub trait HotSource: DataSource {
+    fn get_hot_blocks(
+        &self,
+        request: DataRequest,
+        state: HashAndHeight,
+    ) -> anyhow::Result<HotBlockStream>;
+    fn as_ds(&self) -> &(dyn DataSource + Send + Sync);
+}
+
+pub trait HotDataSource: DataSource + HotSource {}
