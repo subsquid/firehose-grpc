@@ -231,12 +231,12 @@ impl TryFrom<evm::Log> for Log {
 
     fn try_from(value: evm::Log) -> Result<Self, Self::Error> {
         Ok(Log {
-            address: value.address.to_string(),
+            address: format!("{:?}", value.address),
             data: value.data.to_hex_prefixed(),
             topics: value
                 .topics
                 .into_iter()
-                .map(|topic| topic.to_string())
+                .map(|topic| format!("{:?}", topic))
                 .collect(),
             log_index: value.log_index.context("no log index")?.as_u32(),
             transaction_index: value
@@ -254,9 +254,9 @@ impl TryFrom<(evm::Transaction, evm::TransactionReceipt)> for Transaction {
         let tx = value.0;
         let receipt = value.1;
         Ok(Transaction {
-            hash: tx.hash.to_string(),
-            from: tx.from.to_string(),
-            to: tx.to.and_then(|val| Some(val.to_string())),
+            hash: format!("{:?}", tx.hash),
+            from: format!("{:?}", tx.from),
+            to: tx.to.and_then(|val| Some(format!("{:?}", val))),
             transaction_index: tx
                 .transaction_index
                 .context("no transaction index")?
@@ -265,23 +265,27 @@ impl TryFrom<(evm::Transaction, evm::TransactionReceipt)> for Transaction {
             r#type: i32::try_from(tx.transaction_type.context("no transaction type")?)
                 .map_err(anyhow::Error::msg)?,
             nonce: tx.nonce.as_u64(),
-            r: tx.r.to_string(),
-            s: tx.s.to_string(),
-            v: tx.v.to_string(),
-            value: tx.value.to_string(),
-            gas: tx.gas.to_string(),
-            gas_price: tx.gas_price.context("no gas price")?.to_string(),
-            max_fee_per_gas: tx.max_fee_per_gas.and_then(|val| Some(val.to_string())),
+            r: format!("{:#x}", tx.r),
+            s: format!("{:#x}", tx.s),
+            v: format!("{:#x}", tx.v),
+            value: format!("{:#x}", tx.value),
+            gas: format!("{:#x}", tx.gas),
+            gas_price: format!("{:#x}", tx.gas_price.context("no gas price")?),
+            max_fee_per_gas: tx
+                .max_fee_per_gas
+                .and_then(|val| Some(format!("{:#x}", val))),
             max_priority_fee_per_gas: tx
                 .max_priority_fee_per_gas
-                .and_then(|val| Some(val.to_string())),
+                .and_then(|val| Some(format!("{:#x}", val))),
             y_parity: None,
-            cumulative_gas_used: receipt.cumulative_gas_used.to_string(),
-            effective_gas_price: receipt
-                .effective_gas_price
-                .context("no effective gas price")?
-                .to_string(),
-            gas_used: receipt.gas_used.context("no gas used")?.to_string(),
+            cumulative_gas_used: format!("{:#x}", receipt.cumulative_gas_used),
+            effective_gas_price: format!(
+                "{:#x}",
+                receipt
+                    .effective_gas_price
+                    .context("no effective gas price")?
+            ),
+            gas_used: format!("{:#x}", receipt.gas_used.context("no gas used")?),
             status: i32::try_from(receipt.status.context("no status")?)
                 .map_err(anyhow::Error::msg)?,
         })
