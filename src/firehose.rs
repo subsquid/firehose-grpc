@@ -123,6 +123,12 @@ impl Firehose {
                         };
                     }
                 }
+
+                if let Some(to_block) = to_block {
+                    if state.as_ref().unwrap().height == to_block {
+                        return
+                    }
+                }
             }
 
             let rpc_height = rpc.get_finalized_height().await?;
@@ -159,6 +165,12 @@ impl Firehose {
                     height: to,
                 });
                 from_block = to + 1;
+
+                if let Some(to_block) = to_block {
+                    if state.as_ref().unwrap().height == to_block {
+                        return
+                    }
+                }
             }
 
             let req = DataRequest {

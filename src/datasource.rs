@@ -17,6 +17,7 @@ pub struct DataRequest {
     pub transactions: Vec<TransactionRequest>,
 }
 
+#[derive(Debug)]
 pub struct BlockHeader {
     pub number: u64,
     pub hash: String,
@@ -39,6 +40,7 @@ pub struct BlockHeader {
     pub base_fee_per_gas: Option<String>,
 }
 
+#[derive(Debug)]
 pub struct Transaction {
     pub transaction_index: u32,
     pub hash: String,
@@ -62,6 +64,7 @@ pub struct Transaction {
     pub status: i32,
 }
 
+#[derive(Debug)]
 pub struct Log {
     pub address: String,
     pub data: String,
@@ -70,6 +73,7 @@ pub struct Log {
     pub transaction_index: u32,
 }
 
+#[derive(Debug)]
 pub enum TraceType {
     Create,
     Call,
@@ -77,6 +81,7 @@ pub enum TraceType {
     Reward,
 }
 
+#[derive(Debug)]
 pub enum CallType {
     Call,
     Callcode,
@@ -84,6 +89,7 @@ pub enum CallType {
     Staticcall,
 }
 
+#[derive(Debug)]
 pub struct TraceAction {
     pub from: Option<String>,
     pub to: Option<String>,
@@ -93,13 +99,14 @@ pub struct TraceAction {
     pub r#type: Option<CallType>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TraceResult {
     pub gas_used: Option<String>,
     pub address: Option<String>,
     pub output: Option<String>,
 }
 
+#[derive(Debug)]
 pub struct Trace {
     pub transaction_index: u32,
     pub r#type: TraceType,
@@ -109,6 +116,7 @@ pub struct Trace {
     pub result: Option<TraceResult>,
 }
 
+#[derive(Debug)]
 pub struct Block {
     pub header: BlockHeader,
     pub logs: Vec<Log>,
@@ -116,7 +124,7 @@ pub struct Block {
     pub traces: Vec<Trace>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct HashAndHeight {
     pub hash: String,
     pub height: u64,
@@ -125,6 +133,7 @@ pub struct HashAndHeight {
 pub struct HotUpdate {
     pub blocks: Vec<Block>,
     pub base_head: HashAndHeight,
+    pub finalized_head: HashAndHeight,
 }
 
 pub type BlockStream = Box<dyn Stream<Item = anyhow::Result<Vec<Block>>> + Send>;

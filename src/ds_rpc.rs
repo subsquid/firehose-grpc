@@ -204,18 +204,20 @@ impl TryFrom<evm::Block<evm::H256>> for Block {
                 transactions_root: format!("{:?}", value.transactions_root),
                 receipts_root: format!("{:?}", value.receipts_root),
                 logs_bloom: format!("{:?}", value.logs_bloom.context("no logs bloom")?),
-                difficulty: value.difficulty.to_string(),
-                total_difficulty: value
-                    .total_difficulty
-                    .context("no total difficulty")?
-                    .to_string(),
-                gas_limit: value.gas_limit.to_string(),
-                gas_used: value.gas_used.to_string(),
+                difficulty: format!("{:#x}", value.difficulty),
+                total_difficulty: format!(
+                    "{:#x}",
+                    value.total_difficulty.context("no total difficulty")?
+                ),
+                gas_limit: format!("{:#x}", value.gas_limit),
+                gas_used: format!("{:#x}", value.gas_used),
                 timestamp: value.timestamp.as_u64(),
                 extra_data: value.extra_data.to_hex_prefixed(),
                 mix_hash: format!("{:?}", value.mix_hash.context("no mix hash")?),
                 nonce: format!("{:?}", value.nonce.context("no nonce")?),
-                base_fee_per_gas: value.base_fee_per_gas.and_then(|val| Some(val.to_string())),
+                base_fee_per_gas: value
+                    .base_fee_per_gas
+                    .and_then(|val| Some(format!("{:#x}", val))),
             },
             logs: vec![],
             traces: vec![],
@@ -373,8 +375,15 @@ impl HotSource for RpcDataSource {
 
                 for number in height + 1..top {
                     // TODO: bind requested data to new blocks
-                    let upd = nav.r#move(number, min(number, finalized)).await?;
-                    yield upd
+                    let update = nav.r#move(number, min(number, finalized)).await?;
+                    let finalized_head = update.finalized_head.height;
+                    yield update;
+
+                    if let Some(to) = request.to {
+                        if finalized_head >= to {
+                            return
+                        }
+                    }
                 }
             }
         }))
@@ -511,14 +520,15 @@ impl ForkNavigator {
             self.chain.last().unwrap().clone()
         } else {
             HashAndHeight {
-                height: new_blocks[0].header.number,
-                hash: new_blocks[0].header.hash.clone(),
+                height: new_blocks[0].header.number - 1,
+                hash: new_blocks[0].header.parent_hash.clone(),
             }
         };
 
         Ok(HotUpdate {
             blocks: new_blocks,
             base_head,
+            finalized_head: self.chain[0].clone(),
         })
     }
 }
