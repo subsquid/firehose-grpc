@@ -195,15 +195,15 @@ impl TryFrom<evm::Block<evm::H256>> for Block {
         Ok(Block {
             header: BlockHeader {
                 number: value.number.context("no number")?.as_u64(),
-                hash: value.hash.context("no hash")?.to_string(),
-                parent_hash: value.parent_hash.to_string(),
+                hash: format!("{:?}", value.hash.context("no hash")?),
+                parent_hash: format!("{:?}", value.parent_hash),
                 size: value.size.context("no size")?.as_u64(),
-                sha3_uncles: value.uncles_hash.to_string(),
-                miner: value.author.context("no author")?.to_string(),
-                state_root: value.state_root.to_string(),
-                transactions_root: value.transactions_root.to_string(),
-                receipts_root: value.receipts_root.to_string(),
-                logs_bloom: value.logs_bloom.context("no logs bloom")?.to_string(),
+                sha3_uncles: format!("{:?}", value.uncles_hash),
+                miner: format!("{:?}", value.author.context("no author")?),
+                state_root: format!("{:?}", value.state_root),
+                transactions_root: format!("{:?}", value.transactions_root),
+                receipts_root: format!("{:?}", value.receipts_root),
+                logs_bloom: format!("{:?}", value.logs_bloom.context("no logs bloom")?),
                 difficulty: value.difficulty.to_string(),
                 total_difficulty: value
                     .total_difficulty
@@ -213,8 +213,8 @@ impl TryFrom<evm::Block<evm::H256>> for Block {
                 gas_used: value.gas_used.to_string(),
                 timestamp: value.timestamp.as_u64(),
                 extra_data: value.extra_data.to_hex_prefixed(),
-                mix_hash: value.mix_hash.context("no mix hash")?.to_string(),
-                nonce: value.nonce.context("no nonce")?.to_string(),
+                mix_hash: format!("{:?}", value.mix_hash.context("no mix hash")?),
+                nonce: format!("{:?}", value.nonce.context("no nonce")?),
                 base_fee_per_gas: value.base_fee_per_gas.and_then(|val| Some(val.to_string())),
             },
             logs: vec![],
@@ -348,7 +348,8 @@ impl DataSource for RpcDataSource {
             .get_block(height)
             .await?
             .context(format!("block №{} not found", height))?;
-        Ok(block.hash.context("hash is empty")?.to_string())
+        let hash = format!("{:?}", block.hash.context("hash is empty")?);
+        Ok(hash)
     }
 }
 
@@ -440,12 +441,12 @@ impl ForkNavigator {
         let mut new_blocks = vec![];
 
         let best_head = if best > chain.last().unwrap().height {
-            let new_block = self.client.get_block(best).await?.unwrap();
+            let new_block: Block = self.client.get_block(best).await?.unwrap().try_into()?;
             let best_head = HashAndHeight {
-                hash: new_block.parent_hash.to_string(),
-                height: new_block.number.unwrap().as_u64() - 1,
+                hash: new_block.header.parent_hash.clone(),
+                height: new_block.header.number - 1,
             };
-            new_blocks.push(new_block.try_into()?);
+            new_blocks.push(new_block);
             Some(best_head)
         } else {
             None
