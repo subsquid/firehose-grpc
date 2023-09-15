@@ -133,6 +133,15 @@ pub struct HashAndHeight {
     pub height: u64,
 }
 
+impl From<&Block> for HashAndHeight {
+    fn from(value: &Block) -> Self {
+        HashAndHeight {
+            hash: value.header.hash.clone(),
+            height: value.header.number,
+        }
+    }
+}
+
 pub struct HotUpdate {
     pub blocks: Vec<Block>,
     pub base_head: HashAndHeight,

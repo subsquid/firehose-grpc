@@ -13,6 +13,7 @@ use tracing::info;
 
 mod archive;
 mod cli;
+mod cursor;
 mod datasource;
 mod ds_archive;
 mod ds_rpc;

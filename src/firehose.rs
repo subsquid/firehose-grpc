@@ -1,3 +1,4 @@
+use crate::cursor::Cursor;
 use crate::datasource::{
     Block, BlockHeader, CallType, DataRequest, DataSource, HashAndHeight, HotDataSource, Log,
     LogRequest, Trace, TraceResult, TraceType, Transaction, TransactionRequest,
@@ -123,6 +124,7 @@ impl Firehose {
                 while let Some(result) = stream.next().await {
                     let blocks = result?;
                     for block in blocks {
+                        let cursor = Cursor::new((&block).into(), (&block).into());
                         state = Some(HashAndHeight {
                             hash: block.header.hash.clone(),
                             height: block.header.number,
@@ -137,7 +139,7 @@ impl Firehose {
                                 value: graph_block.encode_to_vec(),
                             }),
                             step: ForkStep::StepNew.into(),
-                            cursor: "".to_string(),
+                            cursor: cursor.to_string(),
                         };
                     }
                 }
@@ -166,6 +168,7 @@ impl Firehose {
                 while let Some(result) = stream.next().await {
                     let blocks = result?;
                     for block in blocks {
+                        let cursor = Cursor::new((&block).into(), (&block).into());
                         let graph_block = pbcodec::Block::try_from(block)?;
 
                         yield Response {
@@ -174,7 +177,7 @@ impl Firehose {
                                 value: graph_block.encode_to_vec(),
                             }),
                             step: ForkStep::StepNew.into(),
-                            cursor: "".to_string(),
+                            cursor: cursor.to_string(),
                         };
                     }
                 }
@@ -216,6 +219,7 @@ impl Firehose {
                 if upd.base_head != last_head {
                     // fork happened
                     // only number and parent_hash are required for ForkStep::StepUndo
+                    let cursor = Cursor::new(upd.base_head.clone(), upd.finalized_head.clone());
                     let mut graph_block = pbcodec::Block::default();
                     let mut header = pbcodec::BlockHeader::default();
                     header.number = last_head.height;
@@ -228,11 +232,12 @@ impl Firehose {
                             value: graph_block.encode_to_vec(),
                         }),
                         step: ForkStep::StepUndo.into(),
-                        cursor: "".to_string(),
+                        cursor: cursor.to_string(),
                     };
                 }
 
                 for block in upd.blocks {
+                    let cursor = Cursor::new((&block).into(), upd.finalized_head.clone());
                     let graph_block = pbcodec::Block::try_from(block)?;
                     yield Response {
                         block: Some(prost_types::Any {
@@ -240,7 +245,7 @@ impl Firehose {
                             value: graph_block.encode_to_vec(),
                         }),
                         step: ForkStep::StepNew.into(),
-                        cursor: "".to_string(),
+                        cursor: cursor.to_string(),
                     }
                 }
 
