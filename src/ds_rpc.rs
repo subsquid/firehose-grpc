@@ -188,6 +188,126 @@ async fn get_stride(
     Ok(blocks)
 }
 
+async fn fetch_requested_data(
+    client: &Provider<Http>,
+    blocks: &mut [Block],
+    request: &DataRequest,
+) -> anyhow::Result<()> {
+    if blocks.is_empty() {
+        return Ok(());
+    }
+
+    let range = (
+        blocks.first().unwrap().header.number,
+        blocks.last().unwrap().header.number,
+    );
+
+    let logs = get_logs(client, &range, &request.logs).await?;
+
+    let mut tx_hashes: Vec<_> = logs
+        .iter()
+        .map(|log| log.transaction_hash.unwrap().clone())
+        .collect();
+    tx_hashes.sort();
+    tx_hashes.dedup();
+
+    let futures: Vec<_> = tx_hashes
+        .iter()
+        .map(|hash| client.get_transaction(*hash))
+        .collect();
+    let results = join_all(futures).await;
+    let mut tx_by_block: HashMap<u64, Vec<evm::Transaction>> = HashMap::new();
+    for result in results {
+        let transaction = result?.unwrap();
+        let block_num = transaction
+            .block_number
+            .context("no block number")?
+            .as_u64();
+        if tx_by_block.contains_key(&block_num) {
+            tx_by_block.get_mut(&block_num).unwrap().push(transaction);
+        } else {
+            tx_by_block.insert(block_num, vec![transaction]);
+        }
+    }
+
+    let futures: Vec<_> = tx_hashes
+        .iter()
+        .map(|hash| client.get_transaction_receipt(*hash))
+        .collect();
+    let results = join_all(futures).await;
+    let mut receipt_by_hash: HashMap<evm::H256, evm::TransactionReceipt> = HashMap::new();
+    for result in results {
+        let receipt = result?.unwrap();
+        receipt_by_hash.insert(receipt.transaction_hash, receipt);
+    }
+
+    let futures: Vec<_> = tx_hashes
+        .iter()
+        .map(|hash| {
+            let options = evm::GethDebugTracingOptions {
+                tracer: Some(evm::GethDebugTracerType::BuiltInTracer(
+                    evm::GethDebugBuiltInTracerType::CallTracer,
+                )),
+                tracer_config: Some(evm::GethDebugTracerConfig::BuiltInTracer(
+                    evm::GethDebugBuiltInTracerConfig::CallTracer(evm::CallConfig {
+                        only_top_call: Some(false),
+                        with_log: Some(true),
+                    }),
+                )),
+                ..Default::default()
+            };
+            client.debug_trace_transaction(*hash, options)
+        })
+        .collect();
+    let results = join_all(futures).await;
+    let mut traces_by_block: HashMap<u64, Vec<Trace>> = HashMap::new();
+    for result in results {
+        let trace = result?;
+        let _traces = traverse_trace(trace);
+    }
+
+    let mut logs_by_block: HashMap<u64, Vec<evm::Log>> = HashMap::new();
+    for log in logs {
+        let block_num = log.block_number.context("no block number")?.as_u64();
+        if logs_by_block.contains_key(&block_num) {
+            logs_by_block.get_mut(&block_num).unwrap().push(log);
+        } else {
+            logs_by_block.insert(block_num, vec![log]);
+        }
+    }
+
+    for block in blocks {
+        let mut logs = logs_by_block
+            .remove(&block.header.number)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|log| Log::try_from(log))
+            .collect::<Result<Vec<_>, _>>()?;
+        logs.sort_by_key(|log| log.log_index);
+
+        let mut transactions = tx_by_block
+            .remove(&block.header.number)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tx| {
+                let receipt = receipt_by_hash.remove(&tx.hash).unwrap();
+                Transaction::try_from((tx, receipt))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        transactions.sort_by_key(|tx| tx.transaction_index);
+
+        let traces = traces_by_block
+            .remove(&block.header.number)
+            .unwrap_or_default();
+
+        block.logs = logs;
+        block.transactions = transactions;
+        block.traces = traces;
+    }
+
+    Ok(())
+}
+
 impl TryFrom<evm::Block<evm::H256>> for Block {
     type Error = anyhow::Error;
 
@@ -378,9 +498,10 @@ impl HotSource for RpcDataSource {
                 let height = nav.get_height();
 
                 for number in height + 1..top {
-                    // TODO: bind requested data to new blocks
-                    let update = nav.r#move(number, min(number, finalized)).await?;
+                    let mut update = nav.r#move(number, min(number, finalized)).await?;
+                    fetch_requested_data(&client, &mut update.blocks, &request).await?;
                     let finalized_head = update.finalized_head.height;
+
                     yield update;
 
                     if let Some(to) = request.to {
