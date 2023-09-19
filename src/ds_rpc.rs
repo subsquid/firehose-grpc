@@ -35,20 +35,20 @@ async fn get_logs(
         let mut filter = evm::Filter::new().from_block(range.0).to_block(range.1);
 
         if !request.address.is_empty() {
-            let address: Vec<_> = request
+            let address = request
                 .address
                 .iter()
-                .map(|address| evm::H160::from_slice(address.as_bytes()))
-                .collect();
+                .map(|address| address.parse())
+                .collect::<Result<Vec<_>, _>>()?;
             filter = filter.address(address);
         }
 
         if !request.topic0.is_empty() {
-            let topic: Vec<_> = request
+            let topic = request
                 .topic0
                 .iter()
-                .map(|topic| evm::H256::from_slice(topic.as_bytes()))
-                .collect();
+                .map(|topic| topic.parse::<evm::H256>())
+                .collect::<Result<Vec<_>, _>>()?;
             filter = filter.topic0(topic);
         }
 
@@ -710,7 +710,7 @@ impl ForkNavigator {
             while chain.last().unwrap().height < best_head.height {
                 let block: Block = self
                     .client
-                    .get_block(evm::H256::from_slice(best_head.hash.as_bytes()))
+                    .get_block(best_head.hash.parse::<evm::H256>()?)
                     .await?
                     .expect("consistency error")
                     .try_into()?;
@@ -724,7 +724,7 @@ impl ForkNavigator {
             while chain.last().unwrap().hash != best_head.hash {
                 let block: Block = self
                     .client
-                    .get_block(evm::H256::from_slice(best_head.hash.as_bytes()))
+                    .get_block(best_head.hash.parse::<evm::H256>()?)
                     .await?
                     .expect("consistency error")
                     .try_into()?;

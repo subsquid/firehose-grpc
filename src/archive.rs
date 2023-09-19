@@ -7,9 +7,6 @@ use tracing::debug;
 pub struct LogRequest {
     pub address: Vec<String>,
     pub topic0: Vec<String>,
-    pub topic1: Vec<String>,
-    pub topic2: Vec<String>,
-    pub topic3: Vec<String>,
     pub transaction: bool,
     pub transaction_traces: bool,
 }

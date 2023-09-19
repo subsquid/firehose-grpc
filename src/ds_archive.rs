@@ -109,9 +109,6 @@ impl DataSource for ArchiveDataSource {
                 .map(|r| LogRequest {
                     address: r.address,
                     topic0: r.topic0,
-                    topic1: vec![],
-                    topic2: vec![],
-                    topic3: vec![],
                     transaction: true,
                     transaction_traces: true,
                 })

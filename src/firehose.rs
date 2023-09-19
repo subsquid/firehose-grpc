@@ -60,7 +60,7 @@ impl Firehose {
         request: Request,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Response>>> {
         let from_block = resolve_negative_start(request.start_block_num, self.rpc.as_ds()).await?;
-        let to_block = if from_block != request.stop_block_num && request.stop_block_num == 0 {
+        let to_block = if request.stop_block_num == 0 {
             None
         } else {
             Some(request.stop_block_num)
