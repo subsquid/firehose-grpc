@@ -12,15 +12,17 @@ use futures_util::future::join_all;
 use prefix_hex::ToHexPrefixed;
 use std::cmp::min;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::{mpsc, oneshot};
 
 type Range = (u64, u64);
 
 async fn get_finalized_height(
-    client: &Provider<Http>,
+    height_tracker: &HeightTracker,
     finality_confirmation: u64,
 ) -> anyhow::Result<u64> {
-    let height = client.get_block_number().await?.as_u64();
+    let height = height_tracker.height().await?;
     Ok(height.saturating_sub(finality_confirmation))
 }
 
@@ -547,6 +549,7 @@ fn split_range(from: u64, to: u64) -> Vec<Range> {
 
 pub struct RpcDataSource {
     client: Provider<Http>,
+    height_tracker: Arc<HeightTracker>,
     finality_confirmation: u64,
 }
 
@@ -555,9 +558,10 @@ impl DataSource for RpcDataSource {
     fn get_finalized_blocks(&self, request: DataRequest) -> anyhow::Result<BlockStream> {
         let client = self.client.clone();
         let finality_confirmation = self.finality_confirmation;
+        let height_tracker = self.height_tracker.clone();
 
         Ok(Box::new(try_stream! {
-            let height = get_finalized_height(&client, finality_confirmation).await?;
+            let height = get_finalized_height(&height_tracker, finality_confirmation).await?;
             let to = if let Some(to) = request.to {
                 min(height, to)
             } else {
@@ -584,7 +588,7 @@ impl DataSource for RpcDataSource {
     }
 
     async fn get_finalized_height(&self) -> anyhow::Result<u64> {
-        let height = get_finalized_height(&self.client, self.finality_confirmation).await?;
+        let height = get_finalized_height(&self.height_tracker, self.finality_confirmation).await?;
         Ok(height)
     }
 
@@ -608,11 +612,12 @@ impl HotSource for RpcDataSource {
     ) -> anyhow::Result<HotBlockStream> {
         let client = self.client.clone();
         let finality_confirmation = self.finality_confirmation;
+        let height_tracker = self.height_tracker.clone();
 
         Ok(Box::new(try_stream! {
             let mut nav = ForkNavigator::new(client.clone(), state);
 
-            for await result in get_height_updates(client.clone(), request.from) {
+            for await result in get_height_updates(height_tracker, request.from) {
                 let top = result?;
                 let finalized = top.saturating_sub(finality_confirmation);
                 let height = nav.get_height();
@@ -644,28 +649,25 @@ impl HotDataSource for RpcDataSource {}
 impl RpcDataSource {
     pub fn new(url: String, finality_confirmation: u64) -> RpcDataSource {
         let client = Provider::<Http>::try_from(url).unwrap();
+        let height_tracker = Arc::new(HeightTracker::new(client.clone(), Duration::from_secs(1)));
         RpcDataSource {
             client,
+            height_tracker,
             finality_confirmation,
         }
     }
 }
 
 fn get_height_updates(
-    client: Provider<Http>,
+    height_tracker: Arc<HeightTracker>,
     from: u64,
 ) -> impl Stream<Item = anyhow::Result<u64>> {
     try_stream! {
-        let mut height = from;
-        let mut current = client.get_block_number().await?.as_u64();
-        let interval = Duration::from_secs(1);
+        let mut from = from;
         loop {
-            while current < height {
-                tokio::time::sleep(interval).await;
-                current = client.get_block_number().await?.as_u64();
-            }
-            yield height;
-            height += 1;
+            from = height_tracker.wait(from).await?;
+            yield from;
+            from += 1;
         }
     }
 }
@@ -775,5 +777,67 @@ impl ForkNavigator {
             base_head,
             finalized_head: self.chain[0].clone(),
         })
+    }
+}
+
+struct HeightTracker {
+    tx: mpsc::UnboundedSender<(u128, oneshot::Sender<anyhow::Result<u64>>)>,
+    interval: Duration,
+}
+
+impl HeightTracker {
+    fn new(client: Provider<Http>, interval: Duration) -> HeightTracker {
+        let (tx, mut rx) =
+            mpsc::unbounded_channel::<(u128, oneshot::Sender<anyhow::Result<u64>>)>();
+
+        tokio::spawn(async move {
+            let mut last_height = 0;
+            let mut last_access = 0;
+            let interval = interval.as_millis();
+
+            while let Some((time, tx)) = rx.recv().await {
+                let diff = time.saturating_sub(last_access);
+
+                if diff > interval {
+                    last_height = match client.get_block_number().await {
+                        Ok(number) => number.as_u64(),
+                        Err(e) => {
+                            tx.send(Err(e.into())).expect("the receiver dropped");
+                            continue;
+                        }
+                    };
+                    last_access = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                        Ok(now) => now.as_millis(),
+                        Err(e) => {
+                            tx.send(Err(e.into())).expect("the receiver dropped");
+                            continue;
+                        }
+                    };
+                }
+
+                tx.send(Ok(last_height)).expect("the receiver dropped");
+            }
+        });
+
+        HeightTracker { tx, interval }
+    }
+
+    async fn height(&self) -> anyhow::Result<u64> {
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis();
+        let (tx, rx) = oneshot::channel();
+        self.tx.send((now, tx)).expect("the receiver dropped");
+        let height = rx.await.expect("the sender dropped")?;
+        Ok(height)
+    }
+
+    async fn wait(&self, height: u64) -> anyhow::Result<u64> {
+        let mut current = self.height().await?;
+        while current < height {
+            tokio::time::sleep(self.interval).await;
+            current = self.height().await?;
+        }
+        Ok(current)
     }
 }
