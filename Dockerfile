@@ -1,4 +1,5 @@
 FROM rust:1.72.0 AS builder
+RUN apt-get update && apt-get install protobuf-compiler -y
 WORKDIR /firehose-grpc
 COPY ./ .
 RUN cargo build --release
