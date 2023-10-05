@@ -4,7 +4,7 @@ WORKDIR /firehose-grpc
 COPY ./ .
 RUN cargo build --release
 
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 RUN apt-get update && apt-get install ca-certificates -y
 WORKDIR /firehose-grpc
 COPY --from=builder /firehose-grpc/target/release/firehose-grpc ./firehose-grpc
