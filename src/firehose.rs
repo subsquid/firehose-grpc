@@ -30,9 +30,9 @@ async fn resolve_negative_start(
 fn try_decode_hex(label: &'static str, value: &str) -> anyhow::Result<Vec<u8>> {
     let buf: Vec<u8> = if value.len() % 2 != 0 {
         let value = format!("0x0{}", &value[2..]);
-        prefix_hex::decode(value).map_err(|e| format_err!("invalid hex {}: {:?}", label, e))?
+        prefix_hex::decode(&value).map_err(|_| format_err!("invalid {}: {}", label, value))?
     } else {
-        prefix_hex::decode(value).map_err(|e| format_err!("invalid hex {}: {:?}", label, e))?
+        prefix_hex::decode(value).map_err(|_| format_err!("invalid {}: {}", label, value))?
     };
 
     Ok(buf)
