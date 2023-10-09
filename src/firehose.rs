@@ -6,7 +6,7 @@ use crate::pbcodec;
 use crate::pbfirehose::single_block_request::Reference;
 use crate::pbfirehose::{ForkStep, Request, Response, SingleBlockRequest, SingleBlockResponse};
 use crate::pbtransforms::CombinedFilter;
-use anyhow::Context;
+use anyhow::{format_err, Context};
 use async_stream::try_stream;
 use futures_core::stream::Stream;
 use futures_util::stream::StreamExt;
@@ -27,12 +27,12 @@ async fn resolve_negative_start(
     Ok(u64::try_from(start_block_num)?)
 }
 
-fn vec_from_hex(value: &str) -> Result<Vec<u8>, prefix_hex::Error> {
+fn try_decode_hex(label: &'static str, value: &str) -> anyhow::Result<Vec<u8>> {
     let buf: Vec<u8> = if value.len() % 2 != 0 {
         let value = format!("0x0{}", &value[2..]);
-        prefix_hex::decode(value)?
+        prefix_hex::decode(value).map_err(|e| format_err!("invalid hex {}: {:?}", label, e))?
     } else {
-        prefix_hex::decode(value)?
+        prefix_hex::decode(value).map_err(|e| format_err!("invalid hex {}: {:?}", label, e))?
     };
 
     Ok(buf)
@@ -265,18 +265,18 @@ impl TryFrom<BlockHeader> for pbcodec::BlockHeader {
 
     fn try_from(value: BlockHeader) -> anyhow::Result<Self, Self::Error> {
         Ok(pbcodec::BlockHeader {
-            parent_hash: prefix_hex::decode(value.parent_hash)?,
-            uncle_hash: prefix_hex::decode(value.sha3_uncles)?,
-            coinbase: prefix_hex::decode(value.miner)?,
-            state_root: prefix_hex::decode(value.state_root)?,
-            transactions_root: prefix_hex::decode(value.transactions_root)?,
-            receipt_root: prefix_hex::decode(value.receipts_root)?,
-            logs_bloom: prefix_hex::decode(value.logs_bloom)?,
+            parent_hash: try_decode_hex("parent hash", &value.parent_hash)?,
+            uncle_hash: try_decode_hex("sha3 uncles", &value.sha3_uncles)?,
+            coinbase: try_decode_hex("miner", &value.miner)?,
+            state_root: try_decode_hex("state root", &value.state_root)?,
+            transactions_root: try_decode_hex("transactions root", &value.transactions_root)?,
+            receipt_root: try_decode_hex("receipts root", &value.receipts_root)?,
+            logs_bloom: try_decode_hex("logs bloom", &value.logs_bloom)?,
             difficulty: Some(pbcodec::BigInt {
-                bytes: vec_from_hex(&value.difficulty)?,
+                bytes: try_decode_hex("difficulty", &value.difficulty)?,
             }),
             total_difficulty: Some(pbcodec::BigInt {
-                bytes: vec_from_hex(&value.total_difficulty)?,
+                bytes: try_decode_hex("total difficulty", &value.total_difficulty)?,
             }),
             number: value.number,
             gas_limit: qty2int(&value.gas_limit)?,
@@ -285,15 +285,15 @@ impl TryFrom<BlockHeader> for pbcodec::BlockHeader {
                 seconds: i64::try_from(value.timestamp)?,
                 nanos: 0,
             }),
-            extra_data: prefix_hex::decode(value.extra_data)?,
-            mix_hash: prefix_hex::decode(value.mix_hash)?,
+            extra_data: try_decode_hex("extra data", &value.extra_data)?,
+            mix_hash: try_decode_hex("mix hash", &value.mix_hash)?,
             nonce: qty2int(&value.nonce)?,
-            hash: prefix_hex::decode(value.hash)?,
+            hash: try_decode_hex("hash", &value.hash)?,
             base_fee_per_gas: value.base_fee_per_gas.map_or::<anyhow::Result<_>, _>(
                 Ok(None),
                 |val| {
                     Ok(Some(pbcodec::BigInt {
-                        bytes: vec_from_hex(&val)?,
+                        bytes: try_decode_hex("base fee per gas", &val)?,
                     }))
                 },
             )?,
@@ -306,31 +306,32 @@ impl TryFrom<Transaction> for pbcodec::TransactionTrace {
 
     fn try_from(value: Transaction) -> Result<Self, Self::Error> {
         Ok(pbcodec::TransactionTrace {
-            to: prefix_hex::decode(
-                value
+            to: try_decode_hex(
+                "tx to",
+                &value
                     .to
                     .unwrap_or("0x0000000000000000000000000000000000000000".to_string()),
             )?,
             nonce: value.nonce,
             gas_price: Some(pbcodec::BigInt {
-                bytes: vec_from_hex(&value.gas_price)?,
+                bytes: try_decode_hex("tx gas price", &value.gas_price)?,
             }),
             gas_limit: qty2int(&value.gas)?,
             gas_used: qty2int(&value.gas_used)?,
             value: Some(pbcodec::BigInt {
-                bytes: vec_from_hex(&value.value)?,
+                bytes: try_decode_hex("tx value", &value.value)?,
             }),
-            input: prefix_hex::decode(value.input)?,
-            v: vec_from_hex(&value.v)?,
-            r: vec_from_hex(&value.r)?,
-            s: vec_from_hex(&value.s)?,
+            input: try_decode_hex("tx input", &value.input)?,
+            v: try_decode_hex("tx v", &value.v)?,
+            r: try_decode_hex("tx r", &value.r)?,
+            s: try_decode_hex("tx s", &value.s)?,
             r#type: value.r#type,
             access_list: vec![],
             max_fee_per_gas: value.max_fee_per_gas.map_or::<anyhow::Result<_>, _>(
                 Ok(None),
                 |val| {
                     Ok(Some(pbcodec::BigInt {
-                        bytes: vec_from_hex(&val)?,
+                        bytes: try_decode_hex("tx max fee", &val)?,
                     }))
                 },
             )?,
@@ -338,12 +339,12 @@ impl TryFrom<Transaction> for pbcodec::TransactionTrace {
                 .max_priority_fee_per_gas
                 .map_or::<anyhow::Result<_>, _>(Ok(None), |val| {
                     Ok(Some(pbcodec::BigInt {
-                        bytes: vec_from_hex(&val)?,
+                        bytes: try_decode_hex("tx max priority", &val)?,
                     }))
                 })?,
             index: value.transaction_index,
-            hash: prefix_hex::decode(value.hash)?,
-            from: prefix_hex::decode(value.from)?,
+            hash: try_decode_hex("tx hash", &value.hash)?,
+            from: try_decode_hex("tx from", &value.from)?,
             return_data: vec![],
             public_key: vec![],
             begin_ordinal: 0,
@@ -368,15 +369,18 @@ impl TryFrom<Trace> for pbcodec::Call {
 
                 Ok(pbcodec::Call {
                     call_type: 5,
-                    caller: vec_from_hex(&action.from.context("no from")?)?,
-                    address: vec_from_hex(&result.address.context("no address")?)?,
+                    caller: try_decode_hex("trace from", &action.from.context("no from")?)?,
+                    address: try_decode_hex(
+                        "trace address",
+                        &result.address.context("no address")?,
+                    )?,
                     value: Some(pbcodec::BigInt {
-                        bytes: vec_from_hex(&action.value.context("no value")?)?,
+                        bytes: try_decode_hex("trace value", &action.value.context("no value")?)?,
                     }),
                     gas_limit: u64::from_str_radix(&gas.trim_start_matches("0x"), 16)?,
                     gas_consumed: u64::from_str_radix(&gas_used.trim_start_matches("0x"), 16)?,
-                    return_data: vec_from_hex("0x")?,
-                    input: vec_from_hex("0x")?,
+                    return_data: prefix_hex::decode("0x")?,
+                    input: prefix_hex::decode("0x")?,
                     status_failed: value.error.is_some() || value.revert_reason.is_some(),
                     status_reverted: value.revert_reason.is_some(),
                     failure_reason: value
@@ -404,15 +408,15 @@ impl TryFrom<Trace> for pbcodec::Call {
 
                 Ok(pbcodec::Call {
                     call_type,
-                    caller: vec_from_hex(&action.from.context("no from")?)?,
-                    address: vec_from_hex(&action.to.context("no to")?)?,
+                    caller: try_decode_hex("trace from", &action.from.context("no from")?)?,
+                    address: try_decode_hex("trace to", &action.to.context("no to")?)?,
                     value: Some(pbcodec::BigInt {
-                        bytes: vec_from_hex(&action.value.context("no value")?)?,
+                        bytes: try_decode_hex("trace value", &action.value.context("no value")?)?,
                     }),
                     gas_limit: u64::from_str_radix(&gas.trim_start_matches("0x"), 16)?,
                     gas_consumed: u64::from_str_radix(&gas_used.trim_start_matches("0x"), 16)?,
-                    return_data: vec_from_hex(&output)?,
-                    input: vec_from_hex(&action.input.context("no input")?)?,
+                    return_data: try_decode_hex("trace output", &output)?,
+                    input: try_decode_hex("trace input", &action.input.context("no input")?)?,
                     status_failed: value.error.is_some() || value.revert_reason.is_some(),
                     status_reverted: value.revert_reason.is_some(),
                     failure_reason: value
@@ -456,10 +460,10 @@ impl TryFrom<Block> for pbcodec::Block {
 
         let transaction_traces = value.transactions.into_iter().map(|tx| {
             let logs = logs_by_tx.remove(&tx.transaction_index).unwrap_or_default().into_iter().map(|log| pbcodec::Log {
-                address: prefix_hex::decode(log.address).unwrap(),
-                data: prefix_hex::decode(log.data).unwrap(),
+                address: try_decode_hex("log address", &log.address).unwrap(),
+                data: try_decode_hex("log data", &log.data).unwrap(),
                 block_index: log.log_index,
-                topics: log.topics.into_iter().map(|topic| prefix_hex::decode(topic).unwrap()).collect(),
+                topics: log.topics.into_iter().map(|topic| try_decode_hex("log topic", &topic).unwrap()).collect(),
                 index: log.transaction_index,
                 ordinal: 0,
             }).collect();
@@ -484,7 +488,7 @@ impl TryFrom<Block> for pbcodec::Block {
 
         Ok(pbcodec::Block {
             ver: 2,
-            hash: prefix_hex::decode(value.header.hash.clone())?,
+            hash: try_decode_hex("hash", &value.header.hash.clone())?,
             number: value.header.number,
             size: value.header.size,
             header: Some(pbcodec::BlockHeader::try_from(value.header)?),
