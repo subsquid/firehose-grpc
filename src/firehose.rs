@@ -1,6 +1,6 @@
 use crate::datasource::{
     Block, BlockHeader, CallType, DataRequest, DataSource, HashAndHeight, HotDataSource, Log,
-    LogRequest, Trace, TraceType, Transaction,
+    LogRequest, Trace, TraceResult, TraceType, Transaction,
 };
 use crate::pbcodec;
 use crate::pbfirehose::single_block_request::Reference;
@@ -355,6 +355,77 @@ impl TryFrom<Transaction> for pbcodec::TransactionTrace {
     }
 }
 
+impl TryFrom<Trace> for pbcodec::Call {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Trace) -> Result<Self, Self::Error> {
+        match value.r#type {
+            TraceType::Create => {
+                let action = value.action.context("no action")?;
+                let result = value.result.context("no result")?;
+                let gas = action.gas.context("no gas")?;
+                let gas_used = result.gas_used.context("no gas_used")?;
+
+                Ok(pbcodec::Call {
+                    call_type: 5,
+                    caller: vec_from_hex(&action.from.context("no from")?)?,
+                    address: vec_from_hex(&result.address.context("no address")?)?,
+                    value: Some(pbcodec::BigInt {
+                        bytes: vec_from_hex(&action.value.context("no value")?)?,
+                    }),
+                    gas_limit: u64::from_str_radix(&gas.trim_start_matches("0x"), 16)?,
+                    gas_consumed: u64::from_str_radix(&gas_used.trim_start_matches("0x"), 16)?,
+                    return_data: vec_from_hex("0x")?,
+                    input: vec_from_hex("0x")?,
+                    status_failed: value.error.is_some() || value.revert_reason.is_some(),
+                    status_reverted: value.revert_reason.is_some(),
+                    failure_reason: value
+                        .error
+                        .unwrap_or_else(|| value.revert_reason.unwrap_or_default()),
+                    ..Default::default()
+                })
+            }
+            TraceType::Call => {
+                let action = value.action.context("no action")?;
+                let result = value.result.unwrap_or(TraceResult {
+                    gas_used: None,
+                    address: None,
+                    output: None,
+                });
+                let call_type = match action.r#type.context("no type")? {
+                    CallType::Call => 1,
+                    CallType::Callcode => 2,
+                    CallType::Delegatecall => 3,
+                    CallType::Staticcall => 4,
+                };
+                let gas = action.gas.context("no gas")?;
+                let gas_used = result.gas_used.unwrap_or("0x0".to_string());
+                let output = result.output.unwrap_or("0x".to_string());
+
+                Ok(pbcodec::Call {
+                    call_type,
+                    caller: vec_from_hex(&action.from.context("no from")?)?,
+                    address: vec_from_hex(&action.to.context("no to")?)?,
+                    value: Some(pbcodec::BigInt {
+                        bytes: vec_from_hex(&action.value.context("no value")?)?,
+                    }),
+                    gas_limit: u64::from_str_radix(&gas.trim_start_matches("0x"), 16)?,
+                    gas_consumed: u64::from_str_radix(&gas_used.trim_start_matches("0x"), 16)?,
+                    return_data: vec_from_hex(&output)?,
+                    input: vec_from_hex(&action.input.context("no input")?)?,
+                    status_failed: value.error.is_some() || value.revert_reason.is_some(),
+                    status_reverted: value.revert_reason.is_some(),
+                    failure_reason: value
+                        .error
+                        .unwrap_or_else(|| value.revert_reason.unwrap_or_default()),
+                    ..Default::default()
+                })
+            }
+            TraceType::Suicide | TraceType::Reward => anyhow::bail!("unsupported trace type"),
+        }
+    }
+}
+
 impl TryFrom<Block> for pbcodec::Block {
     type Error = anyhow::Error;
 
@@ -393,85 +464,11 @@ impl TryFrom<Block> for pbcodec::Block {
                 ordinal: 0,
             }).collect();
             let calls = traces_by_tx.remove(&tx.transaction_index).unwrap_or_default().into_iter().filter_map(|trace| {
-                let (action, result) = match trace.r#type {
-                    TraceType::Create | TraceType::Call => (trace.action.unwrap(), trace.result),
-                    TraceType::Suicide | TraceType::Reward => return None,
-                };
-                let call_type = match trace.r#type {
-                    TraceType::Create => 5,
-                    TraceType::Call => match action.r#type.unwrap() {
-                        CallType::Call => 1,
-                        CallType::Callcode => 2,
-                        CallType::Delegatecall => 3,
-                        CallType::Staticcall => 4,
-                    },
-                    TraceType::Suicide | TraceType::Reward => return None,
-                };
-                let caller = match trace.r#type {
-                    TraceType::Create => action.from.unwrap(),
-                    TraceType::Call => action.from.unwrap(),
-                    TraceType::Suicide | TraceType::Reward => return None,
-                };
-                let address = match trace.r#type {
-                    TraceType::Create => result.clone().unwrap().address.unwrap(),
-                    TraceType::Call => action.to.unwrap(),
-                    TraceType::Suicide | TraceType::Reward => return None,
-                };
-                let value = match trace.r#type {
-                    TraceType::Create => action.value.unwrap(),
-                    TraceType::Call => action.value.unwrap(),
-                    TraceType::Suicide | TraceType::Reward => return None,
-                };
-                let gas = match trace.r#type {
-                    TraceType::Create => action.gas.unwrap(),
-                    TraceType::Call => action.gas.unwrap(),
-                    TraceType::Suicide | TraceType::Reward => return None,
-                };
-                let gas_used = match trace.r#type {
-                    TraceType::Create => result.clone().unwrap().gas_used.unwrap(),
-                    TraceType::Call => if result.is_some() {result.clone().unwrap().gas_used.unwrap()} else {"0x0".to_string()},
-                    TraceType::Suicide | TraceType::Reward => return None,
-                };
-                let output = match trace.r#type {
-                    TraceType::Create => "0x".to_string(),
-                    TraceType::Call => if result.is_some() {result.clone().unwrap().output.unwrap()} else {"0x".to_string()},
-                    TraceType::Suicide | TraceType::Reward => return None,
-                };
-                let input = match trace.r#type {
-                    TraceType::Create => "0x".to_string(),
-                    TraceType::Call => action.input.unwrap(),
-                    TraceType::Suicide | TraceType::Reward => return None,
-                };
-                Some(pbcodec::Call {
-                    index: 0,
-                    parent_index: 0,
-                    depth: 0,
-                    call_type,
-                    caller: vec_from_hex(&caller).unwrap(),
-                    address: vec_from_hex(&address).unwrap(),
-                    value: Some(pbcodec::BigInt { bytes: vec_from_hex(&value).unwrap() }),
-                    gas_limit: u64::from_str_radix(&gas.trim_start_matches("0x"), 16).unwrap(),
-                    gas_consumed: u64::from_str_radix(&gas_used.trim_start_matches("0x"), 16).unwrap(),
-                    return_data: vec_from_hex(&output).unwrap(),
-                    input: vec_from_hex(&input).unwrap(),
-                    executed_code: false,
-                    suicide: false,
-                    keccak_preimages: HashMap::new(),
-                    storage_changes: vec![],
-                    balance_changes: vec![],
-                    nonce_changes: vec![],
-                    logs: vec![],
-                    code_changes: vec![],
-                    gas_changes: vec![],
-                    status_failed: trace.error.is_some() || trace.revert_reason.is_some(),
-                    status_reverted: trace.revert_reason.is_some(),
-                    failure_reason: trace.error.unwrap_or_else(|| trace.revert_reason.unwrap_or_default()),
-                    state_reverted: false,
-                    begin_ordinal: 0,
-                    end_ordinal: 0,
-                    account_creations: vec![],
-                })
-            }).collect();
+                match trace.r#type {
+                    TraceType::Call | TraceType::Create => Some(pbcodec::Call::try_from(trace)),
+                    TraceType::Reward | TraceType::Suicide => None,
+                }
+            }).collect::<anyhow::Result<Vec<pbcodec::Call>>>()?;
             let receipt = pbcodec::TransactionReceipt {
                 state_root: vec![],
                 cumulative_gas_used: qty2int(&tx.cumulative_gas_used)?,
