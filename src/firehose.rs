@@ -374,9 +374,13 @@ impl TryFrom<Trace> for pbcodec::Call {
                         "trace address",
                         &result.address.context("no address")?,
                     )?,
-                    value: Some(pbcodec::BigInt {
-                        bytes: try_decode_hex("trace value", &action.value.context("no value")?)?,
-                    }),
+                    value: action
+                        .value
+                        .map_or::<anyhow::Result<_>, _>(Ok(None), |val| {
+                            Ok(Some(pbcodec::BigInt {
+                                bytes: try_decode_hex("trace value", &val)?,
+                            }))
+                        })?,
                     gas_limit: u64::from_str_radix(&gas.trim_start_matches("0x"), 16)?,
                     gas_consumed: u64::from_str_radix(&gas_used.trim_start_matches("0x"), 16)?,
                     return_data: prefix_hex::decode("0x")?,
@@ -410,9 +414,13 @@ impl TryFrom<Trace> for pbcodec::Call {
                     call_type,
                     caller: try_decode_hex("trace from", &action.from.context("no from")?)?,
                     address: try_decode_hex("trace to", &action.to.context("no to")?)?,
-                    value: Some(pbcodec::BigInt {
-                        bytes: try_decode_hex("trace value", &action.value.context("no value")?)?,
-                    }),
+                    value: action
+                        .value
+                        .map_or::<anyhow::Result<_>, _>(Ok(None), |val| {
+                            Ok(Some(pbcodec::BigInt {
+                                bytes: try_decode_hex("trace value", &val)?,
+                            }))
+                        })?,
                     gas_limit: u64::from_str_radix(&gas.trim_start_matches("0x"), 16)?,
                     gas_consumed: u64::from_str_radix(&gas_used.trim_start_matches("0x"), 16)?,
                     return_data: try_decode_hex("trace output", &output)?,
