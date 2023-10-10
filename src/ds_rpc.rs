@@ -385,14 +385,20 @@ impl TryFrom<evm::CallFrame> for Trace {
     fn try_from(value: evm::CallFrame) -> Result<Self, Self::Error> {
         let r#type = TraceType::try_from(&value.typ)?;
         let action = match r#type {
-            TraceType::Call => Some(TraceAction {
-                from: Some(format!("{:?}", value.from)),
-                gas: Some(format!("{:#x}", value.gas)),
-                input: Some(value.input.to_hex_prefixed()),
-                to: Some(format!("{:?}", value.to.as_ref().context("no to")?)),
-                r#type: Some(CallType::try_from(&value.typ)?),
-                value: value.value.and_then(|val| Some(format!("{:#x}", val))),
-            }),
+            TraceType::Call => {
+                let to = match value.to.as_ref().context("no to")? {
+                    evm::NameOrAddress::Name(_) => anyhow::bail!("names aren't supported"),
+                    evm::NameOrAddress::Address(address) => address,
+                };
+                Some(TraceAction {
+                    from: Some(format!("{:?}", value.from)),
+                    gas: Some(format!("{:#x}", value.gas)),
+                    input: Some(value.input.to_hex_prefixed()),
+                    to: Some(format!("{:?}", to)),
+                    r#type: Some(CallType::try_from(&value.typ)?),
+                    value: value.value.and_then(|val| Some(format!("{:#x}", val))),
+                })
+            }
             TraceType::Create => Some(TraceAction {
                 from: Some(format!("{:?}", value.from)),
                 gas: Some(format!("{:#x}", value.gas)),
