@@ -45,7 +45,7 @@ impl Stream for ArchiveStream {
                 match result {
                     Ok(response) => {
                         if let Err(e) = tx.send(Ok(response)).await {
-                            error!("block stream has closed unexpectedly: {}", e);
+                            debug!("block stream has been closed: {}", e);
                             return;
                         }
                     }

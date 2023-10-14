@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let archive = Arc::new(Archive::new(args.archive));
     let archive_ds = Arc::new(ArchiveDataSource::new(archive));
-    let rpc_ds = Arc::new(RpcDataSource::new(args.rpc, 30));
+    let rpc_ds = Arc::new(RpcDataSource::new(args.rpc, args.finality_confirmation));
     let firehose = Arc::new(Firehose::new(archive_ds, rpc_ds));
 
     let stream_service = StreamServer::new(ArchiveStream::new(firehose.clone()));
