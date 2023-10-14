@@ -1,6 +1,6 @@
 use crate::datasource::{
     Block, BlockHeader, CallType, DataRequest, DataSource, HashAndHeight, HotDataSource, Log,
-    LogRequest, Trace, TraceResult, TraceType, Transaction,
+    LogRequest, Trace, TraceResult, TraceType, Transaction, TransactionRequest,
 };
 use crate::pbcodec;
 use crate::pbfirehose::single_block_request::Reference;
@@ -67,8 +67,10 @@ impl Firehose {
         };
 
         let mut logs: Vec<LogRequest> = vec![];
+        let mut transactions: Vec<TransactionRequest> = vec![];
         for transform in &request.transforms {
             let filter = CombinedFilter::decode(&transform.value[..])?;
+
             for log_filter in filter.log_filters {
                 let log_request = LogRequest {
                     address: log_filter
@@ -83,6 +85,22 @@ impl Firehose {
                         .collect(),
                 };
                 logs.push(log_request);
+            }
+
+            for call_filter in filter.call_filters {
+                let tx_request = TransactionRequest {
+                    address: call_filter
+                        .addresses
+                        .into_iter()
+                        .map(|address| prefix_hex::encode(address))
+                        .collect(),
+                    sighash: call_filter
+                        .signatures
+                        .into_iter()
+                        .map(|signature| prefix_hex::encode(signature))
+                        .collect(),
+                };
+                transactions.push(tx_request);
             }
         }
 
@@ -99,7 +117,7 @@ impl Firehose {
                     from: from_block,
                     to: to_block,
                     logs: logs.clone(),
-                    transactions: vec![],
+                    transactions: transactions.clone(),
                 };
                 let mut stream = Pin::from(archive.get_finalized_blocks(req)?);
                 while let Some(result) = stream.next().await {
@@ -142,7 +160,7 @@ impl Firehose {
                     from: from_block,
                     to: Some(to),
                     logs: logs.clone(),
-                    transactions: vec![],
+                    transactions: transactions.clone(),
                 };
                 let mut stream = Pin::from(rpc.get_finalized_blocks(req)?);
                 while let Some(result) = stream.next().await {
@@ -177,7 +195,7 @@ impl Firehose {
                 from: from_block,
                 to: to_block,
                 logs,
-                transactions: vec![],
+                transactions,
             };
             let state = state.context("state isn't expected to be None")?;
             let mut last_head = state.clone();

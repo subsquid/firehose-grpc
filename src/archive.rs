@@ -13,6 +13,14 @@ pub struct LogRequest {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct TxRequest {
+    pub to: Vec<String>,
+    pub sighash: Vec<String>,
+    pub traces: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct BlockFieldSelection {
     pub number: bool,
     pub hash: bool,
@@ -113,6 +121,8 @@ pub struct BatchRequest {
     pub fields: Option<FieldSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logs: Option<Vec<LogRequest>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transactions: Option<Vec<TxRequest>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

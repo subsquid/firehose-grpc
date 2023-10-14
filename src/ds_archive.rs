@@ -6,7 +6,7 @@ use crate::{
     archive,
     archive::{
         Archive, BatchRequest, BlockFieldSelection, FieldSelection, LogFieldSelection, LogRequest,
-        TraceFieldSelection, TxFieldSelection,
+        TraceFieldSelection, TxFieldSelection, TxRequest,
     },
 };
 use async_stream::try_stream;
@@ -116,11 +116,67 @@ impl DataSource for ArchiveDataSource {
             Some(logs)
         };
 
+        let transactions = if request.transactions.is_empty() {
+            None
+        } else {
+            fields.transaction = Some(TxFieldSelection {
+                cumulative_gas_used: true,
+                effective_gas_price: true,
+                from: true,
+                gas: true,
+                gas_price: true,
+                gas_used: true,
+                input: true,
+                max_fee_per_gas: true,
+                max_priority_fee_per_gas: true,
+                nonce: true,
+                r: true,
+                s: true,
+                hash: true,
+                status: true,
+                to: true,
+                transaction_index: true,
+                r#type: true,
+                v: true,
+                value: true,
+                y_parity: true,
+            });
+            fields.trace = Some(TraceFieldSelection {
+                transaction_index: true,
+                r#type: true,
+                error: true,
+                create_from: true,
+                create_value: true,
+                create_gas: true,
+                create_result_gas_used: true,
+                create_result_address: true,
+                call_from: true,
+                call_to: true,
+                call_value: true,
+                call_gas: true,
+                call_input: true,
+                call_type: true,
+                call_result_gas_used: true,
+                call_result_output: true,
+            });
+            let transactions = request
+                .transactions
+                .into_iter()
+                .map(|r| TxRequest {
+                    to: r.address,
+                    sighash: r.sighash,
+                    traces: true,
+                })
+                .collect();
+            Some(transactions)
+        };
+
         let mut req = BatchRequest {
             from_block: request.from,
             to_block: request.to,
             fields: Some(fields),
             logs,
+            transactions,
         };
 
         let archive = self.archive.clone();

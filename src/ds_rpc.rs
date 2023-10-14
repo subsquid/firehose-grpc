@@ -1,7 +1,7 @@
 use crate::datasource::{
     Block, BlockHeader, BlockStream, CallType, DataRequest, DataSource, HashAndHeight,
     HotBlockStream, HotDataSource, HotSource, HotUpdate, Log, LogRequest, Trace, TraceAction,
-    TraceResult, TraceType, Transaction,
+    TraceResult, TraceType, Transaction, TransactionRequest,
 };
 use anyhow::Context;
 use async_stream::try_stream;
@@ -11,7 +11,8 @@ use futures_core::Stream;
 use futures_util::future::join_all;
 use prefix_hex::ToHexPrefixed;
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
@@ -81,101 +82,93 @@ fn traverse_trace(trace: evm::GethTrace) -> anyhow::Result<Vec<Trace>> {
     Ok(traces)
 }
 
+fn to_sighash(input: &str) -> Option<&str> {
+    if input.len() >= 10 {
+        Some(&input[..10])
+    } else {
+        None
+    }
+}
+
+fn is_tx_requested(tx: &evm::Transaction, request: &DataRequest) -> bool {
+    let tx_address = tx.to.and_then(|val| Some(format!("{:?}", val)));
+    let input = tx.input.to_hex_prefixed();
+    let tx_sighash = to_sighash(&input);
+
+    request.transactions.iter().any(|request| {
+        let TransactionRequest { address, sighash } = request;
+
+        if let Some(tx_address) = &tx_address {
+            if !address.is_empty() && !address.iter().any(|address| tx_address == address) {
+                return false;
+            }
+        } else {
+            if !address.is_empty() {
+                return false;
+            }
+        }
+
+        if let Some(tx_sighash) = &tx_sighash {
+            if !sighash.is_empty() && !sighash.iter().any(|sighash| tx_sighash == sighash) {
+                return false;
+            }
+        } else {
+            if !sighash.is_empty() {
+                return false;
+            }
+        }
+
+        true
+    })
+}
+
 async fn get_stride(
     client: &Provider<Http>,
     range: &Range,
     request: &DataRequest,
 ) -> anyhow::Result<Vec<Block>> {
-    let logs = get_logs(client, range, &request.logs).await?;
+    let rpc_blocks = get_blocks(client, range).await?;
+    let blocks = get_requested_data(client, rpc_blocks, request).await?;
+    Ok(blocks)
+}
 
-    let mut block_numbers: Vec<_> = logs
-        .iter()
-        .map(|log| log.block_number.unwrap().clone())
+async fn get_blocks(
+    client: &Provider<Http>,
+    range: &Range,
+) -> anyhow::Result<Vec<evm::Block<evm::Transaction>>> {
+    let futures: Vec<_> = (range.0..=range.1)
+        .map(|num| client.get_block_with_txs(num))
         .collect();
-    block_numbers.sort();
-    block_numbers.dedup();
-
-    let mut tx_hashes: Vec<_> = logs
-        .iter()
-        .map(|log| log.transaction_hash.unwrap().clone())
-        .collect();
-    tx_hashes.sort();
-    tx_hashes.dedup();
-
-    let futures: Vec<_> = tx_hashes
-        .iter()
-        .map(|hash| client.get_transaction(*hash))
-        .collect();
-    let results = join_all(futures).await;
-    let mut tx_by_block: HashMap<evm::U64, Vec<evm::Transaction>> = HashMap::new();
-    for result in results {
-        let transaction = result?.unwrap();
-        let block_num = transaction.block_number.context("no block number")?;
-        if tx_by_block.contains_key(&block_num) {
-            tx_by_block.get_mut(&block_num).unwrap().push(transaction);
-        } else {
-            tx_by_block.insert(block_num, vec![transaction]);
-        }
-    }
-
-    let futures: Vec<_> = tx_hashes
-        .iter()
-        .map(|hash| client.get_transaction_receipt(*hash))
-        .collect();
-    let results = join_all(futures).await;
-    let mut receipt_by_hash: HashMap<evm::H256, evm::TransactionReceipt> = HashMap::new();
-    for result in results {
-        let receipt = result?.unwrap();
-        receipt_by_hash.insert(receipt.transaction_hash, receipt);
-    }
-
-    let futures: Vec<_> = tx_hashes
+    join_all(futures)
+        .await
         .into_iter()
-        .map(|hash| {
-            let options = evm::GethDebugTracingOptions {
-                tracer: Some(evm::GethDebugTracerType::BuiltInTracer(
-                    evm::GethDebugBuiltInTracerType::CallTracer,
-                )),
-                tracer_config: Some(evm::GethDebugTracerConfig::BuiltInTracer(
-                    evm::GethDebugBuiltInTracerConfig::CallTracer(evm::CallConfig {
-                        only_top_call: Some(false),
-                        with_log: Some(true),
-                    }),
-                )),
-                ..Default::default()
-            };
-            async move {
-                let result = client.debug_trace_transaction(hash, options).await;
-                (hash, result)
-            }
-        })
-        .collect();
-    let results = join_all(futures).await;
-    let mut traces_by_block: HashMap<evm::U64, Vec<Trace>> = HashMap::new();
-    for (hash, result) in results {
-        let trace = result?;
-        let receipt = receipt_by_hash
-            .get(&hash)
-            .expect("receipt is expected to be loaded");
-        let block_num = receipt.block_number.unwrap();
+        .map(|res| Ok(res?.expect("unfinalized block was requested")))
+        .collect()
+}
 
-        let mut traces = traverse_trace(trace)?;
-
-        traces_by_block
-            .entry(block_num)
-            .and_modify(|block_traces| block_traces.append(&mut traces))
-            .or_insert(traces);
+async fn get_requested_data(
+    client: &Provider<Http>,
+    mut blocks: Vec<evm::Block<evm::Transaction>>,
+    request: &DataRequest,
+) -> anyhow::Result<Vec<Block>> {
+    if blocks.is_empty() {
+        return Ok(vec![]);
     }
 
-    let futures: Vec<_> = block_numbers
-        .iter()
-        .map(|num| client.get_block(*num))
-        .collect();
-    let results = join_all(futures).await;
+    let range = (
+        blocks.first().unwrap().number.unwrap().as_u64(),
+        blocks.last().unwrap().number.unwrap().as_u64(),
+    );
 
-    let mut logs_by_block: HashMap<evm::U64, Vec<evm::Log>> = HashMap::new();
+    let logs = get_logs(client, &range, &request.logs).await?;
+
+    let mut logs_transactions = HashSet::new();
+    let mut logs_by_block: HashMap<u64, Vec<evm::Log>> = HashMap::new();
     for log in logs {
-        let block_num = log.block_number.context("no block number")?;
+        let tx_hash = log.transaction_hash.unwrap().clone();
+        logs_transactions.insert(tx_hash);
+
+        let block_num = log.block_number.unwrap().as_u64();
         if logs_by_block.contains_key(&block_num) {
             logs_by_block.get_mut(&block_num).unwrap().push(log);
         } else {
@@ -183,82 +176,20 @@ async fn get_stride(
         }
     }
 
-    let mut blocks = Vec::with_capacity(block_numbers.len());
-    for result in results {
-        let block = result?.unwrap();
-        let block_num = block.number.context("no number")?;
+    let mut tx_by_block = HashMap::new();
+    let mut tx_hashes = vec![];
+    for block in &mut blocks {
+        let block_num = block.number.unwrap().as_u64();
+        let mut transactions = vec![];
 
-        let mut logs = logs_by_block
-            .remove(&block_num)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|log| Log::try_from(log))
-            .collect::<Result<Vec<_>, _>>()?;
-        logs.sort_by_key(|log| log.log_index);
-
-        let mut transactions = tx_by_block
-            .remove(&block_num)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|tx| {
-                let receipt = receipt_by_hash.remove(&tx.hash).unwrap();
-                Transaction::try_from((tx, receipt))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        transactions.sort_by_key(|tx| tx.transaction_index);
-
-        let traces = traces_by_block.remove(&block_num).unwrap_or_default();
-
-        let mut block = Block::try_from(block)?;
-        block.logs = logs;
-        block.transactions = transactions;
-        block.traces = traces;
-        blocks.push(block);
-    }
-
-    Ok(blocks)
-}
-
-async fn fetch_requested_data(
-    client: &Provider<Http>,
-    blocks: &mut [Block],
-    request: &DataRequest,
-) -> anyhow::Result<()> {
-    if blocks.is_empty() {
-        return Ok(());
-    }
-
-    let range = (
-        blocks.first().unwrap().header.number,
-        blocks.last().unwrap().header.number,
-    );
-
-    let logs = get_logs(client, &range, &request.logs).await?;
-
-    let mut tx_hashes: Vec<_> = logs
-        .iter()
-        .map(|log| log.transaction_hash.unwrap().clone())
-        .collect();
-    tx_hashes.sort();
-    tx_hashes.dedup();
-
-    let futures: Vec<_> = tx_hashes
-        .iter()
-        .map(|hash| client.get_transaction(*hash))
-        .collect();
-    let results = join_all(futures).await;
-    let mut tx_by_block: HashMap<u64, Vec<evm::Transaction>> = HashMap::new();
-    for result in results {
-        let transaction = result?.unwrap();
-        let block_num = transaction
-            .block_number
-            .context("no block number")?
-            .as_u64();
-        if tx_by_block.contains_key(&block_num) {
-            tx_by_block.get_mut(&block_num).unwrap().push(transaction);
-        } else {
-            tx_by_block.insert(block_num, vec![transaction]);
+        for tx in block.transactions.drain(..) {
+            if logs_transactions.contains(&tx.hash) || is_tx_requested(&tx, request) {
+                tx_hashes.push(tx.hash.clone());
+                transactions.push(tx);
+            }
         }
+
+        tx_by_block.insert(block_num, transactions);
     }
 
     let futures: Vec<_> = tx_hashes
@@ -310,46 +241,43 @@ async fn fetch_requested_data(
             .or_insert(traces);
     }
 
-    let mut logs_by_block: HashMap<u64, Vec<evm::Log>> = HashMap::new();
-    for log in logs {
-        let block_num = log.block_number.context("no block number")?.as_u64();
-        if logs_by_block.contains_key(&block_num) {
-            logs_by_block.get_mut(&block_num).unwrap().push(log);
-        } else {
-            logs_by_block.insert(block_num, vec![log]);
-        }
-    }
+    let blocks = blocks
+        .into_iter()
+        .map(|block| {
+            let mut block = Block::try_from(block)?;
 
-    for block in blocks {
-        let mut logs = logs_by_block
-            .remove(&block.header.number)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|log| Log::try_from(log))
-            .collect::<Result<Vec<_>, _>>()?;
-        logs.sort_by_key(|log| log.log_index);
+            let mut logs = logs_by_block
+                .remove(&block.header.number)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|log| Log::try_from(log))
+                .collect::<Result<Vec<_>, _>>()?;
+            logs.sort_by_key(|log| log.log_index);
 
-        let mut transactions = tx_by_block
-            .remove(&block.header.number)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|tx| {
-                let receipt = receipt_by_hash.remove(&tx.hash).unwrap();
-                Transaction::try_from((tx, receipt))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        transactions.sort_by_key(|tx| tx.transaction_index);
+            let mut transactions = tx_by_block
+                .remove(&block.header.number)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|tx| {
+                    let receipt = receipt_by_hash.remove(&tx.hash).unwrap();
+                    Transaction::try_from((tx, receipt))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            transactions.sort_by_key(|tx| tx.transaction_index);
 
-        let traces = traces_by_block
-            .remove(&block.header.number)
-            .unwrap_or_default();
+            let traces = traces_by_block
+                .remove(&block.header.number)
+                .unwrap_or_default();
 
-        block.logs = logs;
-        block.transactions = transactions;
-        block.traces = traces;
-    }
+            block.logs = logs;
+            block.transactions = transactions;
+            block.traces = traces;
 
-    Ok(())
+            Ok(block)
+        })
+        .collect::<Result<Vec<Block>, anyhow::Error>>()?;
+
+    Ok(blocks)
 }
 
 impl TryFrom<&String> for TraceType {
@@ -436,10 +364,10 @@ impl TryFrom<evm::CallFrame> for Trace {
     }
 }
 
-impl TryFrom<evm::Block<evm::H256>> for Block {
+impl TryFrom<evm::Block<evm::Transaction>> for Block {
     type Error = anyhow::Error;
 
-    fn try_from(value: evm::Block<evm::H256>) -> Result<Self, Self::Error> {
+    fn try_from(value: evm::Block<evm::Transaction>) -> Result<Self, Self::Error> {
         Ok(Block {
             header: BlockHeader {
                 number: value.number.context("no number")?.as_u64(),
@@ -621,7 +549,16 @@ impl HotSource for RpcDataSource {
         let height_tracker = self.height_tracker.clone();
 
         Ok(Box::new(try_stream! {
-            let mut nav = ForkNavigator::new(client.clone(), state);
+            let mut nav = ForkNavigator::new(state, |block_id| {
+                let client = client.clone();
+                let request = request.clone();
+                async move {
+                    let rpc_block = client.get_block_with_txs(block_id).await?.unwrap();
+                    let mut blocks = get_requested_data(&client, vec![rpc_block], &request).await?;
+                    let block = blocks.remove(0);
+                    Ok(block)
+                }
+            });
 
             for await result in get_height_updates(height_tracker, request.from) {
                 let top = result?;
@@ -629,8 +566,7 @@ impl HotSource for RpcDataSource {
                 let height = nav.get_height();
 
                 for number in height + 1..top {
-                    let mut update = nav.r#move(number, min(number, finalized)).await?;
-                    fetch_requested_data(&client, &mut update.blocks, &request).await?;
+                    let update = nav.r#move(number, min(number, finalized)).await?;
                     let finalized_head = update.finalized_head.height;
 
                     yield update;
@@ -678,16 +614,24 @@ fn get_height_updates(
     }
 }
 
-struct ForkNavigator {
+struct ForkNavigator<C, F>
+where
+    C: Fn(evm::BlockId) -> F,
+    F: Future<Output = anyhow::Result<Block>>,
+{
     chain: Vec<HashAndHeight>,
-    client: Provider<Http>,
+    get_block: C,
 }
 
-impl ForkNavigator {
-    pub fn new(client: Provider<Http>, state: HashAndHeight) -> ForkNavigator {
+impl<C, F> ForkNavigator<C, F>
+where
+    C: Fn(evm::BlockId) -> F,
+    F: Future<Output = anyhow::Result<Block>>,
+{
+    pub fn new(state: HashAndHeight, get_block: C) -> ForkNavigator<C, F> {
         ForkNavigator {
             chain: vec![state],
-            client,
+            get_block,
         }
     }
 
@@ -703,7 +647,7 @@ impl ForkNavigator {
         let mut new_blocks = vec![];
 
         let best_head = if best > chain.last().unwrap().height {
-            let new_block: Block = self.client.get_block(best).await?.unwrap().try_into()?;
+            let new_block = (self.get_block)(best.into()).await?;
             let best_head = HashAndHeight {
                 hash: new_block.header.parent_hash.clone(),
                 height: new_block.header.number - 1,
@@ -716,12 +660,8 @@ impl ForkNavigator {
 
         if let Some(mut best_head) = best_head {
             while chain.last().unwrap().height < best_head.height {
-                let block: Block = self
-                    .client
-                    .get_block(best_head.hash.parse::<evm::H256>()?)
-                    .await?
-                    .expect("consistency error")
-                    .try_into()?;
+                let hash = best_head.hash.parse::<evm::H256>()?;
+                let block = (self.get_block)(hash.into()).await?;
                 best_head = HashAndHeight {
                     hash: block.header.parent_hash.clone(),
                     height: block.header.number - 1,
@@ -730,12 +670,8 @@ impl ForkNavigator {
             }
 
             while chain.last().unwrap().hash != best_head.hash {
-                let block: Block = self
-                    .client
-                    .get_block(best_head.hash.parse::<evm::H256>()?)
-                    .await?
-                    .expect("consistency error")
-                    .try_into()?;
+                let hash = best_head.hash.parse::<evm::H256>()?;
+                let block = (self.get_block)(hash.into()).await?;
                 best_head = HashAndHeight {
                     hash: block.header.parent_hash.clone(),
                     height: block.header.number - 1,
