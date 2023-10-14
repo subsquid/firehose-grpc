@@ -137,7 +137,7 @@ impl Firehose {
                                 value: graph_block.encode_to_vec(),
                             }),
                             step: ForkStep::StepNew.into(),
-                            cursor: graph_block.number.to_string(),
+                            cursor: "".to_string(),
                         };
                     }
                 }
@@ -174,7 +174,7 @@ impl Firehose {
                                 value: graph_block.encode_to_vec(),
                             }),
                             step: ForkStep::StepNew.into(),
-                            cursor: graph_block.number.to_string(),
+                            cursor: "".to_string(),
                         };
                     }
                 }
@@ -228,7 +228,7 @@ impl Firehose {
                             value: graph_block.encode_to_vec(),
                         }),
                         step: ForkStep::StepUndo.into(),
-                        cursor: last_head.height.to_string(),
+                        cursor: "".to_string(),
                     };
                 }
 
@@ -240,7 +240,7 @@ impl Firehose {
                             value: graph_block.encode_to_vec(),
                         }),
                         step: ForkStep::StepNew.into(),
-                        cursor: graph_block.number.to_string(),
+                        cursor: "".to_string(),
                     }
                 }
 
