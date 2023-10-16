@@ -1,5 +1,6 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Number;
 use tracing::debug;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -142,7 +143,7 @@ pub struct BlockHeader {
     pub total_difficulty: String,
     pub gas_limit: String,
     pub gas_used: String,
-    pub timestamp: u64,
+    pub timestamp: Number,
     pub extra_data: String,
     pub mix_hash: String,
     pub nonce: String,

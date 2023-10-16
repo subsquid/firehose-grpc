@@ -9,5 +9,6 @@ pub struct Cli {
     pub rpc: String,
 
     /// Number of blocks after which data is considered final
+    #[clap(long)]
     pub finality_confirmation: u64,
 }

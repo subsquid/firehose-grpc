@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use async_stream::try_stream;
+use serde_json::Number;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -213,6 +214,16 @@ impl DataSource for ArchiveDataSource {
     }
 }
 
+fn number_to_u64(value: Number) -> u64 {
+    if let Some(val) = value.as_u64() {
+        return val;
+    }
+    if let Some(val) = value.as_f64() {
+        return val as u64;
+    }
+    unimplemented!()
+}
+
 impl From<archive::BlockHeader> for BlockHeader {
     fn from(value: archive::BlockHeader) -> Self {
         BlockHeader {
@@ -230,7 +241,7 @@ impl From<archive::BlockHeader> for BlockHeader {
             total_difficulty: value.total_difficulty,
             gas_limit: value.gas_limit,
             gas_used: value.gas_used,
-            timestamp: value.timestamp,
+            timestamp: number_to_u64(value.timestamp),
             extra_data: value.extra_data,
             mix_hash: value.mix_hash,
             nonce: value.nonce,
