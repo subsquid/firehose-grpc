@@ -1,0 +1,16 @@
+[store]
+[store.primary]
+connection = "postgres://graph-node:let-me-in@postgres:5432/graph-node"
+pool_size = 5
+[chains]
+ingestor = "block_ingestor_node"
+[chains.mainnet]
+shard = "primary"
+provider = [
+    { label = "mainnet", details = { type = "firehose", url = "http://firehose:13042", features = ["filters"] } },
+    { label = "mainnet-rpc", url = "https://rpc.ankr.com/eth", features = ["archive"] }
+]
+[deployment]
+[[deployment.rule]]
+shard = "primary"
+indexers = ["default"]

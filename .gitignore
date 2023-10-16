@@ -1,3 +1,4 @@
 target/
 .vscode/
 .idea/
+graph-node-setup/gravatar-subgraph/
