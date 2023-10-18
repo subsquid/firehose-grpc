@@ -13,10 +13,10 @@ impl Cursor {
     }
 }
 
-impl TryFrom<String> for Cursor {
+impl TryFrom<&String> for Cursor {
     type Error = String;
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
+    fn try_from(value: &String) -> Result<Self, Self::Error> {
         let split: Vec<_> = value.split(':').collect();
 
         if split.len() != 4 {
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn try_cursor_from_string() {
         let value = "0:hash0:1:hash1".to_string();
-        let cursor = Cursor::try_from(value).unwrap();
+        let cursor = Cursor::try_from(&value).unwrap();
 
         let expected = Cursor {
             block: HashAndHeight {

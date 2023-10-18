@@ -258,7 +258,10 @@ impl Firehose {
         let block_num = match request.reference.as_ref().unwrap() {
             Reference::BlockNumber(block_number) => block_number.num,
             Reference::BlockHashAndNumber(block_hash_and_number) => block_hash_and_number.num,
-            Reference::Cursor(cursor) => cursor.cursor.parse().unwrap(),
+            Reference::Cursor(cursor) => {
+                let cursor = Cursor::try_from(&cursor.cursor).unwrap();
+                cursor.block.height
+            }
         };
 
         let req = DataRequest {
