@@ -489,7 +489,11 @@ pub struct RpcDataSource {
 
 #[async_trait::async_trait]
 impl DataSource for RpcDataSource {
-    fn get_finalized_blocks(&self, request: DataRequest) -> anyhow::Result<BlockStream> {
+    fn get_finalized_blocks(
+        &self,
+        request: DataRequest,
+        _stop_on_head: bool,
+    ) -> anyhow::Result<BlockStream> {
         let client = self.client.clone();
         let finality_confirmation = self.finality_confirmation;
         let height_tracker = self.height_tracker.clone();

@@ -154,7 +154,11 @@ pub type HotBlockStream = Box<dyn Stream<Item = anyhow::Result<HotUpdate>> + Sen
 
 #[async_trait::async_trait]
 pub trait DataSource {
-    fn get_finalized_blocks(&self, request: DataRequest) -> anyhow::Result<BlockStream>;
+    fn get_finalized_blocks(
+        &self,
+        request: DataRequest,
+        stop_on_head: bool,
+    ) -> anyhow::Result<BlockStream>;
     async fn get_finalized_height(&self) -> anyhow::Result<u64>;
     async fn get_block_hash(&self, height: u64) -> anyhow::Result<String>;
 }

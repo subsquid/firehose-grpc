@@ -18,11 +18,11 @@ use std::sync::Arc;
 
 async fn resolve_negative_start(
     start_block_num: i64,
-    archive: &(dyn DataSource + Send + Sync),
+    ds: &(dyn DataSource + Send + Sync),
 ) -> anyhow::Result<u64> {
     if start_block_num < 0 {
         let delta = u64::try_from(start_block_num.abs())?;
-        let head = archive.get_finalized_height().await?;
+        let head = ds.get_finalized_height().await?;
         return Ok(head.saturating_sub(delta));
     }
     Ok(u64::try_from(start_block_num)?)
@@ -45,13 +45,13 @@ fn qty2int(value: &String) -> anyhow::Result<u64> {
 
 pub struct Firehose {
     archive: Arc<dyn DataSource + Sync + Send>,
-    rpc: Arc<dyn HotDataSource + Sync + Send>,
+    rpc: Option<Arc<dyn HotDataSource + Sync + Send>>,
 }
 
 impl Firehose {
     pub fn new(
         archive: Arc<dyn DataSource + Sync + Send>,
-        rpc: Arc<dyn HotDataSource + Sync + Send>,
+        rpc: Option<Arc<dyn HotDataSource + Sync + Send>>,
     ) -> Firehose {
         Firehose { archive, rpc }
     }
@@ -60,7 +60,12 @@ impl Firehose {
         &self,
         request: Request,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Response>>> {
-        let from_block = resolve_negative_start(request.start_block_num, self.rpc.as_ds()).await?;
+        let from_block = if let Some(rpc) = &self.rpc {
+            resolve_negative_start(request.start_block_num, rpc.as_ds()).await?
+        } else {
+            resolve_negative_start(request.start_block_num, &*self.archive).await?
+        };
+
         let to_block = if request.stop_block_num == 0 {
             None
         } else {
@@ -113,14 +118,14 @@ impl Firehose {
             let mut from_block = from_block;
 
             let archive_height = archive.get_finalized_height().await?;
-            if from_block < archive_height {
+            if from_block < archive_height || rpc.is_none() {
                 let req = DataRequest {
                     from: from_block,
                     to: to_block,
                     logs: logs.clone(),
                     transactions: transactions.clone(),
                 };
-                let mut stream = Pin::from(archive.get_finalized_blocks(req)?);
+                let mut stream = Pin::from(archive.get_finalized_blocks(req, rpc.is_some())?);
                 while let Some(result) = stream.next().await {
                     let blocks = result?;
                     for block in blocks {
@@ -151,6 +156,12 @@ impl Firehose {
                 }
             }
 
+            let rpc = if let Some(rpc) = rpc {
+                rpc
+            } else {
+                return
+            };
+
             let rpc_height = rpc.get_finalized_height().await?;
             if from_block < rpc_height {
                 let to = if let Some(to_block) = to_block {
@@ -164,7 +175,7 @@ impl Firehose {
                     logs: logs.clone(),
                     transactions: transactions.clone(),
                 };
-                let mut stream = Pin::from(rpc.get_finalized_blocks(req)?);
+                let mut stream = Pin::from(rpc.get_finalized_blocks(req, true)?);
                 while let Some(result) = stream.next().await {
                     let blocks = result?;
                     for block in blocks {
@@ -271,7 +282,7 @@ impl Firehose {
             transactions: vec![],
         };
 
-        let mut stream = Pin::from(self.archive.get_finalized_blocks(req)?);
+        let mut stream = Pin::from(self.archive.get_finalized_blocks(req, true)?);
         let blocks = stream.next().await.unwrap()?;
         let block = blocks.into_iter().nth(0).unwrap();
 
