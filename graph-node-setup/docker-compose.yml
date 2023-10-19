@@ -37,7 +37,7 @@ services:
       POSTGRES_DB: graph-node
       POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
   firehose:
-    image: tmcgroul/firehose-grpc:13
+    image: tmcgroul/firehose-grpc:14
     ports:
       - '13042:13042'
     command: [
