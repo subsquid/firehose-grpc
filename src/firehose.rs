@@ -60,10 +60,15 @@ impl Firehose {
         &self,
         request: Request,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Response>>> {
-        let from_block = if let Some(rpc) = &self.rpc {
-            resolve_negative_start(request.start_block_num, rpc.as_ds()).await?
+        let from_block = if request.cursor.is_empty() {
+            if let Some(rpc) = &self.rpc {
+                resolve_negative_start(request.start_block_num, rpc.as_ds()).await?
+            } else {
+                resolve_negative_start(request.start_block_num, &*self.archive).await?
+            }
         } else {
-            resolve_negative_start(request.start_block_num, &*self.archive).await?
+            let cursor = Cursor::try_from(&request.cursor).map_err(|e| anyhow::anyhow!(e))?;
+            cursor.block.height + 1
         };
 
         let to_block = if request.stop_block_num == 0 {
