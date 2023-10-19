@@ -8,7 +8,7 @@ ingestor = "block_ingestor_node"
 shard = "primary"
 provider = [
     { label = "mainnet", details = { type = "firehose", url = "http://firehose:13042", features = ["filters"] } },
-    { label = "mainnet-rpc", url = "https://rpc.ankr.com/eth", features = ["archive"] }
+    { label = "mainnet-rpc", url = "https://eth-mainnet.public.blastapi.io", features = ["archive"] }
 ]
 [deployment]
 [[deployment.rule]]
