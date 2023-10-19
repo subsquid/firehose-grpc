@@ -6,9 +6,9 @@ pub struct Cli {
 
     /// Rpc api URL of an ethereum node
     #[clap(long)]
-    pub rpc: String,
+    pub rpc: Option<String>,
 
     /// Number of blocks after which data is considered final
     #[clap(long)]
-    pub finality_confirmation: u64,
+    pub finality_confirmation: Option<u64>,
 }

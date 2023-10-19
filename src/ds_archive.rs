@@ -12,6 +12,7 @@ use crate::{
 use async_stream::try_stream;
 use serde_json::Number;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct ArchiveDataSource {
@@ -26,7 +27,11 @@ impl ArchiveDataSource {
 
 #[async_trait::async_trait]
 impl DataSource for ArchiveDataSource {
-    fn get_finalized_blocks(&self, request: DataRequest) -> anyhow::Result<BlockStream> {
+    fn get_finalized_blocks(
+        &self,
+        request: DataRequest,
+        stop_on_head: bool,
+    ) -> anyhow::Result<BlockStream> {
         let mut fields = FieldSelection {
             block: Some(BlockFieldSelection {
                 base_fee_per_gas: true,
@@ -184,8 +189,14 @@ impl DataSource for ArchiveDataSource {
         Ok(Box::new(try_stream! {
             loop {
                 let height = archive.height().await?;
+
                 if req.from_block > height {
-                    break;
+                    if stop_on_head {
+                        break;
+                    } else {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        continue;
+                    }
                 }
 
                 let blocks = archive.query(&req).await?;

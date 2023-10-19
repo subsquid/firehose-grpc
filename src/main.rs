@@ -1,6 +1,7 @@
 use archive::Archive;
 use clap::Parser;
 use cli::Cli;
+use datasource::HotDataSource;
 use ds_archive::ArchiveDataSource;
 use ds_rpc::RpcDataSource;
 use fetch::ArchiveFetch;
@@ -13,6 +14,7 @@ use tracing::info;
 
 mod archive;
 mod cli;
+mod cursor;
 mod datasource;
 mod ds_archive;
 mod ds_rpc;
@@ -38,9 +40,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Cli::parse();
 
+    let rpc_ds: Option<Arc<dyn HotDataSource + Sync + Send>> = if let Some(rpc) = args.rpc {
+        let finality_confirmation = args
+            .finality_confirmation
+            .expect("finality_confirmation is required if rpc is specified");
+        Some(Arc::new(RpcDataSource::new(rpc, finality_confirmation)))
+    } else {
+        None
+    };
+
     let archive = Arc::new(Archive::new(args.archive));
     let archive_ds = Arc::new(ArchiveDataSource::new(archive));
-    let rpc_ds = Arc::new(RpcDataSource::new(args.rpc, args.finality_confirmation));
     let firehose = Arc::new(Firehose::new(archive_ds, rpc_ds));
 
     let stream_service = StreamServer::new(ArchiveStream::new(firehose.clone()));
