@@ -12,7 +12,6 @@ services:
       - ipfs
       - postgres
       - firehose
-      - query-gateway
     environment:
       postgres_host: "postgres"
       postgres_user: "graph-node"
@@ -37,27 +36,13 @@ services:
       POSTGRES_DB: graph-node
       POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
   firehose:
-    image: tmcgroul/firehose-grpc:14
+    image: tmcgroul/firehose-grpc:10
     ports:
       - '13042:13042'
     command: [
-      "--archive", "http://query-gateway:8002/network/ethereum-mainnet",
+      "--archive", "https://v2.archive.subsquid.io/network/ethereum-mainnet",
+      "--rpc", "https://rpc.ankr.com/eth",
+      "--finality-confirmation", "30"
     ]
     environment:
       RUST_LOG: "firehose_grpc=info"
-  query-gateway:
-    image: subsquid/query-gateway:0.1.5
-    environment:
-      BOOTSTRAP: "true"
-      HTTP_LISTEN_ADDR: 0.0.0.0:8002
-      BOOT_NODES: >
-        12D3KooWSRvKpvNbsrGbLXGFZV7GYdcrYNh4W2nipwHHMYikzV58 /dns4/testnet.subsquid.io/tcp/22345,
-        12D3KooWQC9tPzj2ShLn39RFHS5SGbvbP2pEd7bJ61kSW2LwxGSB /dns4/testnet.subsquid.io/tcp/22346,
-        12D3KooWQER7HEpwsvqSzqzaiV36d3Bn6DZrnwEunnzS76pgZkMU /dns4/testnet.subsquid.io/tcp/32345
-      RPC_URL: https://arbitrum-goerli.public.blastapi.io
-      CONFIG_PATH: /query-gateway/config/gateway-config.yml
-      RUST_LOG: info,query_gateway=debug,ethers_providers=warn
-    volumes:
-      - ./query-gateway:/query-gateway
-    ports:
-      - "8002:8002"
