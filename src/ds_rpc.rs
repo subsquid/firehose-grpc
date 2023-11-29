@@ -1,7 +1,7 @@
 use crate::datasource::{
     Block, BlockHeader, BlockStream, CallType, DataRequest, DataSource, HashAndHeight,
     HotBlockStream, HotDataSource, HotSource, HotUpdate, Log, LogRequest, Trace, TraceAction,
-    TraceResult, TraceType, Transaction, TransactionRequest,
+    TraceResult, TraceType, Transaction, TraceRequest,
 };
 use anyhow::Context;
 use async_stream::try_stream;
@@ -35,7 +35,9 @@ async fn get_logs(
     let mut logs = vec![];
 
     for request in requests {
-        let mut filter = evm::Filter::new().from_block(range.0).to_block(range.1);
+        let mut filter = evm::Filter::new()
+            .from_block(range.0)
+            .to_block(range.1);
 
         if !request.address.is_empty() {
             let address = request
@@ -62,23 +64,49 @@ async fn get_logs(
     Ok(logs)
 }
 
-fn traverse_trace(trace: evm::GethTrace) -> anyhow::Result<Vec<Trace>> {
-    let mut traces = vec![];
-    match trace {
-        evm::GethTrace::Known(trace) => match trace {
-            evm::GethTraceFrame::CallTracer(mut call) => {
-                let calls = call.calls.take().unwrap_or_default();
-                let trace = Trace::try_from(call)?;
-                traces.push(trace);
-                for call in calls {
-                    let trace = Trace::try_from(call)?;
-                    traces.push(trace);
+async fn get_traces(
+    client: &Provider<Http>,
+    range: &Range,
+    requests: &Vec<TraceRequest>
+) -> anyhow::Result<Vec<evm::Trace>> {
+    if requests.is_empty() {
+        return Ok(vec![])
+    }
+
+    let mut address = requests.iter()
+        .flat_map(|request| request.address.clone())
+        .map(|address| address.parse::<evm::H160>())
+        .collect::<Result<Vec<_>, _>>()?;
+    address.sort();
+    address.dedup();
+
+    let filter = evm::TraceFilter::default()
+        .from_block(range.0)
+        .to_block(range.1)
+        .to_address(address);
+
+    let traces = client.trace_filter(filter).await?
+        .into_iter()
+        .filter(|trace| {
+            if let evm::Action::Call(action) = &trace.action {
+                let to = format!("{:?}", action.to);
+                let input = action.input.to_hex_prefixed();
+                let sighash = to_sighash(&input);
+                if let Some(sighash) = sighash {
+                    for request in requests {
+                        if !request.address.contains(&to) {
+                            continue;
+                        }
+                        if request.sighash.contains(&sighash.to_string()) {
+                            return true;
+                        }
+                    }
                 }
             }
-            _ => unimplemented!(),
-        },
-        evm::GethTrace::Unknown(_) => unimplemented!(),
-    }
+            false
+        })
+        .collect();
+
     Ok(traces)
 }
 
@@ -88,38 +116,6 @@ fn to_sighash(input: &str) -> Option<&str> {
     } else {
         None
     }
-}
-
-fn is_tx_requested(tx: &evm::Transaction, request: &DataRequest) -> bool {
-    let tx_address = tx.to.and_then(|val| Some(format!("{:?}", val)));
-    let input = tx.input.to_hex_prefixed();
-    let tx_sighash = to_sighash(&input);
-
-    request.transactions.iter().any(|request| {
-        let TransactionRequest { address, sighash } = request;
-
-        if let Some(tx_address) = &tx_address {
-            if !address.is_empty() && !address.iter().any(|address| tx_address == address) {
-                return false;
-            }
-        } else {
-            if !address.is_empty() {
-                return false;
-            }
-        }
-
-        if let Some(tx_sighash) = &tx_sighash {
-            if !sighash.is_empty() && !sighash.iter().any(|sighash| tx_sighash == sighash) {
-                return false;
-            }
-        } else {
-            if !sighash.is_empty() {
-                return false;
-            }
-        }
-
-        true
-    })
 }
 
 async fn get_stride(
@@ -161,12 +157,14 @@ async fn get_requested_data(
     );
 
     let logs = get_logs(client, &range, &request.logs).await?;
+    let traces = get_traces(client, &range, &request.traces).await?;
 
-    let mut logs_transactions = HashSet::new();
+    let mut tx_hashes = HashSet::new();
+
     let mut logs_by_block: HashMap<u64, Vec<evm::Log>> = HashMap::new();
     for log in logs {
         let tx_hash = log.transaction_hash.unwrap().clone();
-        logs_transactions.insert(tx_hash);
+        tx_hashes.insert(tx_hash);
 
         let block_num = log.block_number.unwrap().as_u64();
         if logs_by_block.contains_key(&block_num) {
@@ -176,15 +174,25 @@ async fn get_requested_data(
         }
     }
 
+    let mut traces_by_block: HashMap<u64, Vec<evm::Trace>> = HashMap::new();
+    for trace in traces {
+        let tx_hash = trace.transaction_hash.unwrap().clone();
+        tx_hashes.insert(tx_hash);
+
+        if traces_by_block.contains_key(&trace.block_number) {
+            traces_by_block.get_mut(&trace.block_number).unwrap().push(trace);
+        } else {
+            traces_by_block.insert(trace.block_number, vec![trace]);
+        }
+    }
+
     let mut tx_by_block = HashMap::new();
-    let mut tx_hashes = vec![];
     for block in &mut blocks {
         let block_num = block.number.unwrap().as_u64();
         let mut transactions = vec![];
 
         for tx in block.transactions.drain(..) {
-            if logs_transactions.contains(&tx.hash) || is_tx_requested(&tx, request) {
-                tx_hashes.push(tx.hash.clone());
+            if tx_hashes.contains(&tx.hash) {
                 transactions.push(tx);
             }
         }
@@ -201,44 +209,6 @@ async fn get_requested_data(
     for result in results {
         let receipt = result?.unwrap();
         receipt_by_hash.insert(receipt.transaction_hash, receipt);
-    }
-
-    let futures: Vec<_> = tx_hashes
-        .into_iter()
-        .map(|hash| {
-            let options = evm::GethDebugTracingOptions {
-                tracer: Some(evm::GethDebugTracerType::BuiltInTracer(
-                    evm::GethDebugBuiltInTracerType::CallTracer,
-                )),
-                tracer_config: Some(evm::GethDebugTracerConfig::BuiltInTracer(
-                    evm::GethDebugBuiltInTracerConfig::CallTracer(evm::CallConfig {
-                        only_top_call: Some(false),
-                        with_log: Some(true),
-                    }),
-                )),
-                ..Default::default()
-            };
-            async move {
-                let result = client.debug_trace_transaction(hash, options).await;
-                (hash, result)
-            }
-        })
-        .collect();
-    let results = join_all(futures).await;
-    let mut traces_by_block: HashMap<u64, Vec<Trace>> = HashMap::new();
-    for (hash, result) in results {
-        let trace = result?;
-        let receipt = receipt_by_hash
-            .get(&hash)
-            .expect("receipt is expected to be loaded");
-        let block_num = receipt.block_number.unwrap().as_u64();
-
-        let mut traces = traverse_trace(trace)?;
-
-        traces_by_block
-            .entry(block_num)
-            .and_modify(|block_traces| block_traces.append(&mut traces))
-            .or_insert(traces);
     }
 
     let blocks = blocks
@@ -267,7 +237,10 @@ async fn get_requested_data(
 
             let traces = traces_by_block
                 .remove(&block.header.number)
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .into_iter()
+                .map(|trace| Trace::try_from(trace))
+                .collect::<Result<Vec<_>, _>>()?;
 
             block.logs = logs;
             block.transactions = transactions;
@@ -465,6 +438,49 @@ impl TryFrom<(evm::Transaction, evm::TransactionReceipt)> for Transaction {
             status: i32::try_from(receipt.status.context("no status")?)
                 .map_err(anyhow::Error::msg)?,
         })
+    }
+}
+
+impl TryFrom<evm::Trace> for Trace {
+    type Error = anyhow::Error;
+
+    fn try_from(value: evm::Trace) -> Result<Self, Self::Error> {
+        if let evm::Action::Call(action) = &value.action {
+            Ok(Trace {
+                transaction_index: value.transaction_position.context("no transaction position")?.try_into()?,
+                r#type: TraceType::Call,
+                error: value.error,
+                revert_reason: None,
+                action: Some(TraceAction {
+                    from: Some(format!("{:?}", action.from)),
+                    to: Some(format!("{:?}", action.to)),
+                    gas: Some(format!("{:#x}", action.gas)),
+                    input: Some(action.input.to_hex_prefixed()),
+                    r#type: match action.call_type {
+                        evm::CallType::None => None,
+                        evm::CallType::CallCode => Some(CallType::Callcode),
+                        evm::CallType::DelegateCall => Some(CallType::Delegatecall),
+                        evm::CallType::StaticCall => Some(CallType::Staticcall),
+                        evm::CallType::Call => Some(CallType::Call),
+
+                    },
+                    value: Some(format!("{:#x}", action.value)),
+                }),
+                result: value.result.and_then(|result| {
+                    if let evm::Res::Call(res) = &result {
+                        Some(TraceResult {
+                            gas_used: Some(format!("{:#x}", res.gas_used)),
+                            address: None,
+                            output: Some(res.output.to_hex_prefixed()),
+                        })
+                    } else {
+                        None
+                    }
+                }),
+            })
+        } else {
+            anyhow::bail!("only call traces are supported")
+        }
     }
 }
 

@@ -7,7 +7,7 @@ pub struct LogRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct TransactionRequest {
+pub struct TraceRequest {
     pub address: Vec<String>,
     pub sighash: Vec<String>,
 }
@@ -17,7 +17,7 @@ pub struct DataRequest {
     pub from: u64,
     pub to: Option<u64>,
     pub logs: Vec<LogRequest>,
-    pub transactions: Vec<TransactionRequest>,
+    pub traces: Vec<TraceRequest>,
 }
 
 #[derive(Debug)]

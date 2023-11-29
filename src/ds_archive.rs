@@ -6,7 +6,7 @@ use crate::{
     archive,
     archive::{
         Archive, BatchRequest, BlockFieldSelection, FieldSelection, LogFieldSelection, LogRequest,
-        TraceFieldSelection, TxFieldSelection, TxRequest,
+        TraceFieldSelection, TxFieldSelection, TraceRequest,
     },
 };
 use async_stream::try_stream;
@@ -122,7 +122,7 @@ impl DataSource for ArchiveDataSource {
             Some(logs)
         };
 
-        let transactions = if request.transactions.is_empty() {
+        let traces = if request.traces.is_empty() {
             None
         } else {
             fields.transaction = Some(TxFieldSelection {
@@ -165,16 +165,17 @@ impl DataSource for ArchiveDataSource {
                 call_result_gas_used: true,
                 call_result_output: true,
             });
-            let transactions = request
-                .transactions
+            let traces = request
+                .traces
                 .into_iter()
-                .map(|r| TxRequest {
-                    to: r.address,
-                    sighash: r.sighash,
-                    traces: true,
+                .map(|r| TraceRequest {
+                    call_to: r.address,
+                    call_sighash: r.sighash,
+                    transaction: true,
+                    parents: true,
                 })
                 .collect();
-            Some(transactions)
+            Some(traces)
         };
 
         let mut req = BatchRequest {
@@ -182,7 +183,7 @@ impl DataSource for ArchiveDataSource {
             to_block: request.to,
             fields: Some(fields),
             logs,
-            transactions,
+            traces,
         };
 
         let archive = self.archive.clone();
