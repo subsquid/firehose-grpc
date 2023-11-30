@@ -391,7 +391,7 @@ impl TryFrom<Transaction> for pbcodec::TransactionTrace {
             public_key: vec![],
             begin_ordinal: 0,
             end_ordinal: 0,
-            status: value.status,
+            status: pbcodec::TransactionTraceStatus::Unknown.into(),
             receipt: None,
             calls: vec![],
         })
@@ -480,6 +480,17 @@ impl TryFrom<Trace> for pbcodec::Call {
     }
 }
 
+fn get_tx_trace_status(calls: &Vec<pbcodec::Call>) -> i32 {
+    let call = &calls[0];
+    if call.status_failed && call.state_reverted {
+        pbcodec::TransactionTraceStatus::Reverted.into()
+    } else if call.status_failed {
+        pbcodec::TransactionTraceStatus::Failed.into()
+    } else {
+        pbcodec::TransactionTraceStatus::Succeeded.into()
+    }
+}
+
 impl TryFrom<Block> for pbcodec::Block {
     type Error = anyhow::Error;
 
@@ -530,6 +541,7 @@ impl TryFrom<Block> for pbcodec::Block {
                 logs,
             };
             let mut tx_trace = pbcodec::TransactionTrace::try_from(tx)?;
+            tx_trace.status = get_tx_trace_status(&calls);
             tx_trace.receipt = Some(receipt);
             tx_trace.calls = calls;
             Ok(tx_trace)
