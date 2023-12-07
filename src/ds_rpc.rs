@@ -85,7 +85,7 @@ async fn get_traces(
         .to_block(range.1)
         .to_address(address);
 
-    let traces = client.trace_filter(filter).await?
+    let mut traces: Vec<_> = client.trace_filter(filter).await?
         .into_iter()
         .filter(|trace| {
             if let evm::Action::Call(action) = &trace.action {
@@ -106,6 +106,8 @@ async fn get_traces(
             false
         })
         .collect();
+
+    traces.sort_by_key(|t| (t.transaction_hash.unwrap(), t.trace_address.clone()));
 
     Ok(traces)
 }
@@ -160,6 +162,7 @@ async fn get_requested_data(
     let traces = get_traces(client, &range, &request.traces).await?;
 
     let mut tx_hashes = HashSet::new();
+    let mut has_root_trace: HashMap<evm::H256, bool> = HashMap::new();
 
     let mut logs_by_block: HashMap<u64, Vec<evm::Log>> = HashMap::new();
     for log in logs {
@@ -179,10 +182,16 @@ async fn get_requested_data(
         let tx_hash = trace.transaction_hash.unwrap().clone();
         tx_hashes.insert(tx_hash);
 
-        if traces_by_block.contains_key(&trace.block_number) {
-            traces_by_block.get_mut(&trace.block_number).unwrap().push(trace);
-        } else {
-            traces_by_block.insert(trace.block_number, vec![trace]);
+        if trace.trace_address.is_empty() {
+            has_root_trace.insert(tx_hash.clone(), true);
+        }
+
+        if has_root_trace.contains_key(&tx_hash) {
+            if traces_by_block.contains_key(&trace.block_number) {
+                traces_by_block.get_mut(&trace.block_number).unwrap().push(trace);
+            } else {
+                traces_by_block.insert(trace.block_number, vec![trace]);
+            }
         }
     }
 
@@ -209,6 +218,27 @@ async fn get_requested_data(
     for result in results {
         let receipt = result?.unwrap();
         receipt_by_hash.insert(receipt.transaction_hash, receipt);
+    }
+
+    let futures: Vec<_> = tx_hashes
+        .iter()
+        .filter_map(|hash| {
+            if !has_root_trace.contains_key(hash) {
+                Some(client.trace_transaction(*hash))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let results = join_all(futures).await;
+    for result in results {
+        let mut traces = result?;
+        let call = &traces[0];
+        if traces_by_block.contains_key(&call.block_number) {
+            traces_by_block.get_mut(&call.block_number).unwrap().append(&mut traces);
+        } else {
+            traces_by_block.insert(call.block_number, traces);
+        }
     }
 
     let blocks = blocks
