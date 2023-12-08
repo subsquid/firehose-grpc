@@ -475,41 +475,69 @@ impl TryFrom<evm::Trace> for Trace {
     type Error = anyhow::Error;
 
     fn try_from(value: evm::Trace) -> Result<Self, Self::Error> {
-        if let evm::Action::Call(action) = &value.action {
-            Ok(Trace {
-                transaction_index: value.transaction_position.context("no transaction position")?.try_into()?,
-                r#type: TraceType::Call,
-                error: value.error,
-                revert_reason: None,
-                action: Some(TraceAction {
-                    from: Some(format!("{:?}", action.from)),
-                    to: Some(format!("{:?}", action.to)),
-                    gas: Some(format!("{:#x}", action.gas)),
-                    input: Some(action.input.to_hex_prefixed()),
-                    r#type: match action.call_type {
-                        evm::CallType::None => None,
-                        evm::CallType::CallCode => Some(CallType::Callcode),
-                        evm::CallType::DelegateCall => Some(CallType::Delegatecall),
-                        evm::CallType::StaticCall => Some(CallType::Staticcall),
-                        evm::CallType::Call => Some(CallType::Call),
-
-                    },
-                    value: Some(format!("{:#x}", action.value)),
-                }),
-                result: value.result.and_then(|result| {
-                    if let evm::Res::Call(res) = &result {
-                        Some(TraceResult {
-                            gas_used: Some(format!("{:#x}", res.gas_used)),
-                            address: None,
-                            output: Some(res.output.to_hex_prefixed()),
-                        })
-                    } else {
-                        None
-                    }
-                }),
-            })
-        } else {
-            anyhow::bail!("only call traces are supported")
+        match &value.action {
+            evm::Action::Call(action) => {
+                Ok(Trace {
+                    transaction_index: value.transaction_position.context("no transaction position")?.try_into()?,
+                    r#type: TraceType::Call,
+                    error: value.error,
+                    revert_reason: None,
+                    action: Some(TraceAction {
+                        from: Some(format!("{:?}", action.from)),
+                        to: Some(format!("{:?}", action.to)),
+                        gas: Some(format!("{:#x}", action.gas)),
+                        input: Some(action.input.to_hex_prefixed()),
+                        r#type: match action.call_type {
+                            evm::CallType::None => None,
+                            evm::CallType::CallCode => Some(CallType::Callcode),
+                            evm::CallType::DelegateCall => Some(CallType::Delegatecall),
+                            evm::CallType::StaticCall => Some(CallType::Staticcall),
+                            evm::CallType::Call => Some(CallType::Call),
+    
+                        },
+                        value: Some(format!("{:#x}", action.value)),
+                    }),
+                    result: value.result.and_then(|result| {
+                        if let evm::Res::Call(res) = &result {
+                            Some(TraceResult {
+                                gas_used: Some(format!("{:#x}", res.gas_used)),
+                                address: None,
+                                output: Some(res.output.to_hex_prefixed()),
+                            })
+                        } else {
+                            None
+                        }
+                    }),
+                })
+            }
+            evm::Action::Create(action) => {
+                Ok(Trace {
+                    transaction_index: value.transaction_position.context("no transaction position")?.try_into()?,
+                    r#type: TraceType::Call,
+                    error: value.error,
+                    revert_reason: None,
+                    action: Some(TraceAction {
+                        from: Some(format!("{:?}", action.from)),
+                        value: Some(format!("{:#x}", action.value)),
+                        gas: Some(format!("{:#x}", action.gas)),
+                        to: None,
+                        input: None,
+                        r#type: None,
+                    }),
+                    result: value.result.and_then(|result| {
+                        if let evm::Res::Create(res) = &result {
+                            Some(TraceResult {
+                                gas_used: Some(format!("{:#x}", res.gas_used)),
+                                address: Some(format!("{:?}", res.address)),
+                                output: None,
+                            })
+                        } else {
+                            None
+                        }
+                    }),
+                })
+            },
+            _ => anyhow::bail!("only call and create traces are supported")
         }
     }
 }
