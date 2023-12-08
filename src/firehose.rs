@@ -15,6 +15,7 @@ use prost::Message;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::cmp::max;
 
 async fn resolve_negative_start(
     start_block_num: i64,
@@ -23,7 +24,11 @@ async fn resolve_negative_start(
     if start_block_num < 0 {
         let delta = u64::try_from(start_block_num.abs())?;
         let head = ds.get_finalized_height().await?;
-        return Ok(head.saturating_sub(delta));
+        if head > 0 {
+            return Ok((head as u64).saturating_sub(delta))
+        } else {
+            return Ok(0)
+        }
     }
     Ok(u64::try_from(start_block_num)?)
 }
@@ -43,6 +48,49 @@ fn qty2int(value: &String) -> anyhow::Result<u64> {
     Ok(u64::from_str_radix(value.trim_start_matches("0x"), 16)?)
 }
 
+struct State(Option<HashAndHeight>);
+
+impl State {
+    pub fn new() -> State {
+        State(None)
+    }
+
+    pub fn next_block(&self) -> u64 {
+        match &self.0 {
+            Some(value) => value.height + 1,
+            None => 0,
+        }
+    }
+
+    pub fn current_block(&self) -> i64 {
+        match &self.0 {
+            Some(value) => value.height as i64,
+            None => -1,
+        }
+    }
+
+    pub fn cursor(&self) -> Cursor {
+        let value = self.0.clone().expect("state should be updated first");
+        Cursor::new(value.clone(), value)
+    }
+
+    pub fn update(&mut self, value: HashAndHeight) {
+        self.0 = Some(value);
+    }
+}
+
+impl From<Cursor> for State {
+    fn from(value: Cursor) -> Self {
+        State(Some(value.block.clone()))
+    }
+}
+
+impl From<State> for HashAndHeight {
+    fn from(value: State) -> Self {
+        value.0.expect("state should be updated first")
+    }
+}
+
 pub struct Firehose {
     archive: Arc<dyn DataSource + Sync + Send>,
     rpc: Option<Arc<dyn HotDataSource + Sync + Send>>,
@@ -60,21 +108,22 @@ impl Firehose {
         &self,
         request: Request,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Response>>> {
-        let from_block = if request.cursor.is_empty() {
-            if let Some(rpc) = &self.rpc {
-                resolve_negative_start(request.start_block_num, rpc.as_ds()).await?
-            } else {
-                resolve_negative_start(request.start_block_num, &*self.archive).await?
-            }
+        let start_block = if let Some(rpc) = &self.rpc {
+            resolve_negative_start(request.start_block_num, rpc.as_ds()).await?
         } else {
-            let cursor = Cursor::try_from(&request.cursor).map_err(|e| anyhow::anyhow!(e))?;
-            cursor.block.height + 1
+            resolve_negative_start(request.start_block_num, &*self.archive).await?
         };
-
         let to_block = if request.stop_block_num == 0 {
             None
         } else {
             Some(request.stop_block_num)
+        };
+
+        let mut state = if request.cursor.is_empty() {
+            State::new()
+        } else {
+            let cursor = Cursor::try_from(&request.cursor).map_err(|e| anyhow::anyhow!(e))?;
+            State::from(cursor)
         };
 
         let mut logs: Vec<LogRequest> = vec![];
@@ -119,13 +168,10 @@ impl Firehose {
         let rpc = self.rpc.clone();
 
         Ok(try_stream! {
-            let mut state = None;
-            let mut from_block = from_block;
-
             let archive_height = archive.get_finalized_height().await?;
-            if from_block < archive_height || rpc.is_none() {
+            if archive_height as i64 > state.current_block() || rpc.is_none() {
                 let req = DataRequest {
-                    from: from_block,
+                    from: max(state.next_block(), start_block),
                     to: to_block,
                     logs: logs.clone(),
                     traces: traces.clone(),
@@ -134,12 +180,7 @@ impl Firehose {
                 while let Some(result) = stream.next().await {
                     let blocks = result?;
                     for block in blocks {
-                        let cursor = Cursor::new((&block).into(), (&block).into());
-                        state = Some(HashAndHeight {
-                            hash: block.header.hash.clone(),
-                            height: block.header.number,
-                        });
-                        from_block = block.header.number + 1;
+                        state.update((&block).into());
 
                         let graph_block = pbcodec::Block::try_from(block)?;
 
@@ -149,13 +190,13 @@ impl Firehose {
                                 value: graph_block.encode_to_vec(),
                             }),
                             step: ForkStep::StepNew.into(),
-                            cursor: cursor.to_string(),
+                            cursor: state.cursor().to_string(),
                         };
                     }
                 }
 
                 if let Some(to_block) = to_block {
-                    if state.as_ref().unwrap().height == to_block {
+                    if state.current_block() as u64 == to_block {
                         return
                     }
                 }
@@ -168,14 +209,14 @@ impl Firehose {
             };
 
             let rpc_height = rpc.get_finalized_height().await?;
-            if from_block < rpc_height {
+            if rpc_height as i64 > state.current_block() {
                 let to = if let Some(to_block) = to_block {
-                    std::cmp::min(to_block, rpc_height)
+                    std::cmp::min(to_block, rpc_height as u64)
                 } else {
-                    rpc_height
+                    rpc_height as u64
                 };
                 let req = DataRequest {
-                    from: from_block,
+                    from: max(state.next_block(), start_block),
                     to: Some(to),
                     logs: logs.clone(),
                     traces: traces.clone(),
@@ -184,7 +225,8 @@ impl Firehose {
                 while let Some(result) = stream.next().await {
                     let blocks = result?;
                     for block in blocks {
-                        let cursor = Cursor::new((&block).into(), (&block).into());
+                        state.update((&block).into());
+
                         let graph_block = pbcodec::Block::try_from(block)?;
 
                         yield Response {
@@ -193,32 +235,29 @@ impl Firehose {
                                 value: graph_block.encode_to_vec(),
                             }),
                             step: ForkStep::StepNew.into(),
-                            cursor: cursor.to_string(),
+                            cursor: state.cursor().to_string(),
                         };
                     }
                 }
-                state = Some(HashAndHeight {
-                    hash: rpc.get_block_hash(to).await?,
-                    height: to,
-                });
-                from_block = to + 1;
+
+                let value = HashAndHeight { height: to, hash: rpc.get_block_hash(to).await? };
+                state.update(value);
 
                 if let Some(to_block) = to_block {
-                    if state.as_ref().unwrap().height == to_block {
+                    if state.current_block() as u64 == to_block {
                         return
                     }
                 }
             }
 
             let req = DataRequest {
-                from: from_block,
+                from: max(state.next_block(), start_block),
                 to: to_block,
                 logs,
                 traces,
             };
-            let state = state.context("state isn't expected to be None")?;
-            let mut last_head = state.clone();
-            let mut stream = Pin::from(rpc.get_hot_blocks(req, state)?);
+            let mut last_head: HashAndHeight = state.into();
+            let mut stream = Pin::from(rpc.get_hot_blocks(req, last_head.clone())?);
             while let Some(result) = stream.next().await {
                 let upd = result?;
 
