@@ -6,26 +6,37 @@ use tracing::debug;
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct LogRequest {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub address: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub topic0: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub transaction: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub transaction_traces: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TxRequest {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub to: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sighash: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub traces: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceRequest {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub call_to: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub call_sighash: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub transaction: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub parents: bool,
 }
 
@@ -131,6 +142,8 @@ pub struct BatchRequest {
     pub fields: Option<FieldSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logs: Option<Vec<LogRequest>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transactions: Option<Vec<TxRequest>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub traces: Option<Vec<TraceRequest>>,
 }

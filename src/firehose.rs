@@ -1,7 +1,7 @@
 use crate::cursor::Cursor;
 use crate::datasource::{
     Block, BlockHeader, CallType, DataRequest, DataSource, HashAndHeight, HotDataSource, Log,
-    LogRequest, Trace, TraceResult, TraceType, Transaction, TraceRequest,
+    LogRequest, Trace, TraceResult, TraceType, Transaction, TraceRequest, TxRequest,
 };
 use crate::pbcodec;
 use crate::pbfirehose::single_block_request::Reference;
@@ -174,6 +174,7 @@ impl Firehose {
                     from: max(state.next_block(), start_block),
                     to: to_block,
                     logs: logs.clone(),
+                    transactions: vec![],
                     traces: traces.clone(),
                 };
                 let mut stream = Pin::from(archive.get_finalized_blocks(req, rpc.is_some())?);
@@ -219,6 +220,7 @@ impl Firehose {
                     from: max(state.next_block(), start_block),
                     to: Some(to),
                     logs: logs.clone(),
+                    transactions: vec![],
                     traces: traces.clone(),
                 };
                 let mut stream = Pin::from(rpc.get_finalized_blocks(req, true)?);
@@ -254,6 +256,7 @@ impl Firehose {
                 from: max(state.next_block(), start_block),
                 to: to_block,
                 logs,
+                transactions: vec![],
                 traces,
             };
             let mut last_head: HashAndHeight = state.into();
@@ -310,6 +313,10 @@ impl Firehose {
     }
 
     pub async fn block(&self, request: SingleBlockRequest) -> anyhow::Result<SingleBlockResponse> {
+        if !request.transforms.is_empty() {
+            anyhow::bail!("trasnforms aren't supported in SingleBlockRequest")
+        }
+
         let block_num = match request.reference.as_ref().unwrap() {
             Reference::BlockNumber(block_number) => block_number.num,
             Reference::BlockHashAndNumber(block_hash_and_number) => block_hash_and_number.num,
@@ -322,11 +329,26 @@ impl Firehose {
         let req = DataRequest {
             from: block_num,
             to: Some(block_num),
-            logs: vec![],
-            traces: vec![],
+            logs: vec![LogRequest::default()],
+            transactions: vec![TxRequest::default()],
+            traces: vec![TraceRequest::default()],
         };
 
-        let mut stream = Pin::from(self.archive.get_finalized_blocks(req, true)?);
+        let archive_height = self.archive.get_finalized_height().await?;
+        let mut stream = if block_num <= archive_height {
+            Pin::from(self.archive.get_finalized_blocks(req, true)?)
+        } else {
+            if let Some(rpc) = &self.rpc {
+                let rpc_height = rpc.get_finalized_height().await?;
+                if block_num <= rpc_height {
+                    Pin::from(self.archive.get_finalized_blocks(req, true)?)
+                } else {
+                    anyhow::bail!("block isn't found")
+                }
+            } else {
+                anyhow::bail!("block isn't found")
+            }
+        };
         let blocks = stream.next().await.unwrap()?;
         let block = blocks.into_iter().nth(0).unwrap();
 
@@ -354,6 +376,8 @@ impl From<LogFilter> for LogRequest {
                 .into_iter()
                 .map(|signature| prefix_hex::encode(signature))
                 .collect(),
+            transaction: true,
+            transaction_traces: true,
         }
     }
 }
@@ -371,6 +395,8 @@ impl From<CallToFilter> for TraceRequest {
                 .into_iter()
                 .map(|signature| prefix_hex::encode(signature))
                 .collect(),
+            transaction: true,
+            parents: true,
         }
     }
 }

@@ -6,7 +6,7 @@ use crate::{
     archive,
     archive::{
         Archive, BatchRequest, BlockFieldSelection, FieldSelection, LogFieldSelection, LogRequest,
-        TraceFieldSelection, TxFieldSelection, TraceRequest,
+        TraceFieldSelection, TxFieldSelection, TraceRequest, TxRequest
     },
 };
 use async_stream::try_stream;
@@ -115,11 +115,48 @@ impl DataSource for ArchiveDataSource {
                 .map(|r| LogRequest {
                     address: r.address,
                     topic0: r.topic0,
-                    transaction: true,
-                    transaction_traces: true,
+                    transaction: r.transaction,
+                    transaction_traces: r.transaction_traces,
                 })
                 .collect();
             Some(logs)
+        };
+
+        let transactions = if request.transactions.is_empty() {
+            None
+        } else {
+            fields.transaction = Some(TxFieldSelection {
+                cumulative_gas_used: true,
+                effective_gas_price: true,
+                from: true,
+                gas: true,
+                gas_price: true,
+                gas_used: true,
+                input: true,
+                max_fee_per_gas: true,
+                max_priority_fee_per_gas: true,
+                nonce: true,
+                r: true,
+                s: true,
+                hash: true,
+                status: true,
+                to: true,
+                transaction_index: true,
+                r#type: true,
+                v: true,
+                value: true,
+                y_parity: true,
+            });
+            let transactions = request
+                .transactions
+                .into_iter()
+                .map(|r| TxRequest {
+                    to: r.address,
+                    sighash: r.sighash,
+                    traces: r.traces,
+                })
+                .collect();
+            Some(transactions)
         };
 
         let traces = if request.traces.is_empty() {
@@ -171,8 +208,8 @@ impl DataSource for ArchiveDataSource {
                 .map(|r| TraceRequest {
                     call_to: r.address,
                     call_sighash: r.sighash,
-                    transaction: true,
-                    parents: true,
+                    transaction: r.transaction,
+                    parents: r.parents,
                 })
                 .collect();
             Some(traces)
@@ -183,6 +220,7 @@ impl DataSource for ArchiveDataSource {
             to_block: request.to,
             fields: Some(fields),
             logs,
+            transactions,
             traces,
         };
 
