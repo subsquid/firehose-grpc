@@ -504,16 +504,20 @@ impl TryFrom<Trace> for pbcodec::Call {
         match value.r#type {
             TraceType::Create => {
                 let action = value.action.context("no action")?;
-                let result = value.result.context("no result")?;
+                let result = value.result.unwrap_or(TraceResult {
+                    gas_used: None,
+                    address: None,
+                    output: None,
+                });
                 let gas = action.gas.context("no gas")?;
-                let gas_used = result.gas_used.context("no gas_used")?;
+                let gas_used = result.gas_used.unwrap_or("0x0".to_string());
 
                 Ok(pbcodec::Call {
                     call_type: 5,
                     caller: try_decode_hex("trace from", &action.from.context("no from")?)?,
                     address: try_decode_hex(
                         "trace address",
-                        &result.address.context("no address")?,
+                        &result.address.unwrap_or("0x0000000000000000000000000000000000000000".to_string())
                     )?,
                     value: action
                         .value
