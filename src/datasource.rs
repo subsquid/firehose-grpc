@@ -6,6 +6,7 @@ pub struct LogRequest {
     pub topic0: Vec<String>,
     pub transaction: bool,
     pub transaction_traces: bool,
+    pub transaction_logs: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -20,6 +21,7 @@ pub struct TraceRequest {
     pub address: Vec<String>,
     pub sighash: Vec<String>,
     pub transaction: bool,
+    pub transaction_logs: bool,
     pub parents: bool,
 }
 

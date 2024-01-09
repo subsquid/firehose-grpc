@@ -14,6 +14,8 @@ pub struct LogRequest {
     pub transaction: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub transaction_traces: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub transaction_logs: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -36,6 +38,8 @@ pub struct TraceRequest {
     pub call_sighash: Vec<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub transaction: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub transaction_logs: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub parents: bool,
 }

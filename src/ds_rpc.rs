@@ -164,17 +164,9 @@ async fn get_requested_data(
     let mut tx_hashes = HashSet::new();
     let mut has_root_trace: HashMap<evm::H256, bool> = HashMap::new();
 
-    let mut logs_by_block: HashMap<u64, Vec<evm::Log>> = HashMap::new();
     for log in logs {
         let tx_hash = log.transaction_hash.unwrap().clone();
         tx_hashes.insert(tx_hash);
-
-        let block_num = log.block_number.unwrap().as_u64();
-        if logs_by_block.contains_key(&block_num) {
-            logs_by_block.get_mut(&block_num).unwrap().push(log);
-        } else {
-            logs_by_block.insert(block_num, vec![log]);
-        }
     }
 
     let mut traces_by_block: HashMap<u64, Vec<evm::Trace>> = HashMap::new();
@@ -214,9 +206,19 @@ async fn get_requested_data(
         .map(|hash| client.get_transaction_receipt(*hash))
         .collect();
     let results = join_all(futures).await;
+    let mut logs_by_block: HashMap<u64, Vec<evm::Log>> = HashMap::new();
     let mut receipt_by_hash: HashMap<evm::H256, evm::TransactionReceipt> = HashMap::new();
     for result in results {
-        let receipt = result?.unwrap();
+        let mut receipt = result?.unwrap();
+        let block_num = receipt.block_number.unwrap().as_u64();
+
+        if logs_by_block.contains_key(&block_num) {
+            logs_by_block.get_mut(&block_num).unwrap().append(&mut receipt.logs);
+        } else {
+            let logs = receipt.logs.drain(..).collect();
+            logs_by_block.insert(block_num, logs);
+        }
+
         receipt_by_hash.insert(receipt.transaction_hash, receipt);
     }
 

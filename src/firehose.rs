@@ -378,6 +378,7 @@ impl From<LogFilter> for LogRequest {
                 .collect(),
             transaction: true,
             transaction_traces: true,
+            transaction_logs: true,
         }
     }
 }
@@ -396,6 +397,7 @@ impl From<CallToFilter> for TraceRequest {
                 .map(|signature| prefix_hex::encode(signature))
                 .collect(),
             transaction: true,
+            transaction_logs: true,
             parents: true,
         }
     }
@@ -493,6 +495,23 @@ impl TryFrom<Transaction> for pbcodec::TransactionTrace {
             status: pbcodec::TransactionTraceStatus::Unknown.into(),
             receipt: None,
             calls: vec![],
+        })
+    }
+}
+
+impl TryFrom<Log> for pbcodec::Log {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Log) -> Result<Self, Self::Error> {
+        Ok(pbcodec::Log {
+            address: try_decode_hex("log address", &value.address)?,
+            data: try_decode_hex("log data", &value.data)?,
+            block_index: value.log_index,
+            topics: value.topics.into_iter()
+                .map(|topic| try_decode_hex("log topic", &topic))
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            index: value.transaction_index,
+            ordinal: 0,
         })
     }
 }
@@ -623,20 +642,21 @@ impl TryFrom<Block> for pbcodec::Block {
         }
 
         let transaction_traces = value.transactions.into_iter().map(|tx| {
-            let logs = logs_by_tx.remove(&tx.transaction_index).unwrap_or_default().into_iter().map(|log| pbcodec::Log {
-                address: try_decode_hex("log address", &log.address).unwrap(),
-                data: try_decode_hex("log data", &log.data).unwrap(),
-                block_index: log.log_index,
-                topics: log.topics.into_iter().map(|topic| try_decode_hex("log topic", &topic).unwrap()).collect(),
-                index: log.transaction_index,
-                ordinal: 0,
-            }).collect();
-            let calls = traces_by_tx.remove(&tx.transaction_index).unwrap_or_default().into_iter().filter_map(|trace| {
-                match trace.r#type {
-                    TraceType::Call | TraceType::Create => Some(pbcodec::Call::try_from(trace)),
-                    TraceType::Reward | TraceType::Suicide => None,
-                }
-            }).collect::<anyhow::Result<Vec<pbcodec::Call>>>()?;
+            let logs = logs_by_tx.remove(&tx.transaction_index)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|log| pbcodec::Log::try_from(log))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let calls = traces_by_tx.remove(&tx.transaction_index)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|trace| {
+                    match trace.r#type {
+                        TraceType::Call | TraceType::Create => Some(pbcodec::Call::try_from(trace)),
+                        TraceType::Reward | TraceType::Suicide => None,
+                    }
+                })
+                .collect::<anyhow::Result<Vec<pbcodec::Call>>>()?;
             let receipt = pbcodec::TransactionReceipt {
                 state_root: vec![],
                 cumulative_gas_used: qty2int(&tx.cumulative_gas_used)?,

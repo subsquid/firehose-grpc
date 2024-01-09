@@ -117,6 +117,7 @@ impl DataSource for ArchiveDataSource {
                     topic0: r.topic0,
                     transaction: r.transaction,
                     transaction_traces: r.transaction_traces,
+                    transaction_logs: r.transaction_logs,
                 })
                 .collect();
             Some(logs)
@@ -210,6 +211,7 @@ impl DataSource for ArchiveDataSource {
                     call_sighash: r.sighash,
                     transaction: r.transaction,
                     parents: r.parents,
+                    transaction_logs: r.transaction_logs,
                 })
                 .collect();
             Some(traces)
