@@ -100,6 +100,7 @@ pub enum TraceType {
 
 #[derive(Debug)]
 pub enum CallType {
+    Unspecified,
     Call,
     Callcode,
     Delegatecall,

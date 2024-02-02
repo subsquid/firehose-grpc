@@ -565,6 +565,7 @@ impl TryFrom<Trace> for pbcodec::Call {
                     output: None,
                 });
                 let call_type = match action.r#type.context("no type")? {
+                    CallType::Unspecified => 0,
                     CallType::Call => 1,
                     CallType::Callcode => 2,
                     CallType::Delegatecall => 3,
