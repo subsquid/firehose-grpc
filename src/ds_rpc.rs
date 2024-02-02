@@ -627,13 +627,13 @@ impl HotSource for RpcDataSource {
         let client = self.client.clone();
         let finality_confirmation = self.finality_confirmation;
         let height_tracker = self.height_tracker.clone();
-
         Ok(Box::new(try_stream! {
             let mut nav = ForkNavigator::new(state, |block_id| {
                 let client = client.clone();
                 let request = request.clone();
                 async move {
-                    let rpc_block = client.get_block_with_txs(block_id).await?.unwrap();
+                    let rpc_block = client.get_block_with_txs(block_id).await?
+                        .ok_or(anyhow::anyhow!("consistency error"))?;
                     let mut blocks = get_requested_data(&client, vec![rpc_block], &request).await?;
                     let block = blocks.remove(0);
                     Ok(block)
@@ -646,7 +646,25 @@ impl HotSource for RpcDataSource {
                 let height = nav.get_height();
 
                 for number in height + 1..top {
-                    let update = nav.r#move(number, min(number, finalized)).await?;
+                    let mut retries = 0;
+                    let update = loop {
+                        match nav.r#move(number, min(number, finalized)).await {
+                            Ok(update) => break update,
+                            Err(err) => {
+                                match err.downcast::<&str>() {
+                                    Ok(err_msg) => {
+                                        if err_msg == "consistency error" && retries < 10 {
+                                            retries += 1;
+                                            let duration = Duration::from_millis(200 * retries);
+                                            tokio::time::sleep(duration).await;
+                                            continue;
+                                        }
+                                    },
+                                    Err(err) => Err(err)?,
+                                };
+                            }
+                        }
+                    };
                     let finalized_head = update.finalized_head.height;
 
                     yield update;
