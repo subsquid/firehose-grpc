@@ -490,12 +490,11 @@ impl TryFrom<evm::Trace> for Trace {
                         gas: Some(format!("{:#x}", action.gas)),
                         input: Some(action.input.to_hex_prefixed()),
                         r#type: match action.call_type {
-                            evm::CallType::None => Some(CallType::Unspecified),
+                            evm::CallType::None => None,
                             evm::CallType::CallCode => Some(CallType::Callcode),
                             evm::CallType::DelegateCall => Some(CallType::Delegatecall),
                             evm::CallType::StaticCall => Some(CallType::Staticcall),
                             evm::CallType::Call => Some(CallType::Call),
-    
                         },
                         value: Some(format!("{:#x}", action.value)),
                     }),

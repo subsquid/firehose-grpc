@@ -564,12 +564,14 @@ impl TryFrom<Trace> for pbcodec::Call {
                     address: None,
                     output: None,
                 });
-                let call_type = match action.r#type.context("no type")? {
-                    CallType::Unspecified => 0,
-                    CallType::Call => 1,
-                    CallType::Callcode => 2,
-                    CallType::Delegatecall => 3,
-                    CallType::Staticcall => 4,
+                let call_type = match action.r#type {
+                    Some(r#type) => match r#type {
+                        CallType::Call => 1,
+                        CallType::Callcode => 2,
+                        CallType::Delegatecall => 3,
+                        CallType::Staticcall => 4,
+                    },
+                    None => 0,
                 };
                 let gas = action.gas.context("no gas")?;
                 let gas_used = result.gas_used.unwrap_or("0x0".to_string());
@@ -646,7 +648,11 @@ impl TryFrom<Block> for pbcodec::Block {
             let logs = logs_by_tx.remove(&tx.transaction_index)
                 .unwrap_or_default()
                 .into_iter()
-                .map(|log| pbcodec::Log::try_from(log))
+                .map(|log| {
+                    let log_index = log.log_index;
+                    pbcodec::Log::try_from(log)
+                        .with_context(|| format!("log_index: {}", log_index))
+                })
                 .collect::<anyhow::Result<Vec<_>>>()?;
             let calls = traces_by_tx.remove(&tx.transaction_index)
                 .unwrap_or_default()
