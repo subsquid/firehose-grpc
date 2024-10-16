@@ -13,7 +13,6 @@ use async_stream::try_stream;
 use serde_json::Number;
 use std::sync::Arc;
 use std::time::Duration;
-use std::pin::Pin;
 
 #[derive(Debug)]
 pub struct PortalDataSource {
@@ -228,7 +227,7 @@ impl DataSource for PortalDataSource {
         let portal = self.portal.clone();
         Ok(Box::new(try_stream! {
             loop {
-                let stream = Pin::from(portal.stream(&query).await?);
+                let stream = portal.stream(&query).await?;
                 for await block in stream {
                     let block = Block::from(block?);
                     let block_num = block.header.number;
