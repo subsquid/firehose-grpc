@@ -3,18 +3,18 @@ use crate::pbfirehose::{fetch_server::Fetch, SingleBlockRequest, SingleBlockResp
 use std::sync::Arc;
 use tracing::error;
 
-pub struct ArchiveFetch {
+pub struct PortalFetch {
     firehose: Arc<Firehose>,
 }
 
-impl ArchiveFetch {
-    pub fn new(firehose: Arc<Firehose>) -> ArchiveFetch {
-        ArchiveFetch { firehose }
+impl PortalFetch {
+    pub fn new(firehose: Arc<Firehose>) -> PortalFetch {
+        PortalFetch { firehose }
     }
 }
 
 #[tonic::async_trait]
-impl Fetch for ArchiveFetch {
+impl Fetch for PortalFetch {
     async fn block(
         &self,
         request: tonic::Request<SingleBlockRequest>,

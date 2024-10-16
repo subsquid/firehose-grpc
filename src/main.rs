@@ -1,22 +1,22 @@
-use archive::Archive;
+use portal::Portal;
 use clap::Parser;
 use cli::Cli;
 use datasource::HotDataSource;
-use ds_archive::ArchiveDataSource;
+use ds_portal::PortalDataSource;
 use ds_rpc::RpcDataSource;
-use fetch::ArchiveFetch;
+use fetch::PortalFetch;
 use firehose::Firehose;
 use pbfirehose::{fetch_server::FetchServer, stream_server::StreamServer};
 use std::sync::Arc;
-use stream::ArchiveStream;
+use stream::PortalStream;
 use tonic::transport::Server;
 use tracing::info;
 
-mod archive;
+mod portal;
 mod cli;
 mod cursor;
 mod datasource;
-mod ds_archive;
+mod ds_portal;
 mod ds_rpc;
 mod fetch;
 mod firehose;
@@ -49,12 +49,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let archive = Arc::new(Archive::new(args.archive));
-    let archive_ds = Arc::new(ArchiveDataSource::new(archive));
-    let firehose = Arc::new(Firehose::new(archive_ds, rpc_ds));
+    let portal = Arc::new(Portal::new(args.portal));
+    let portal_ds = Arc::new(PortalDataSource::new(portal));
+    let firehose = Arc::new(Firehose::new(portal_ds, rpc_ds));
 
-    let stream_service = StreamServer::new(ArchiveStream::new(firehose.clone()));
-    let fetch_service = FetchServer::new(ArchiveFetch::new(firehose));
+    let stream_service = StreamServer::new(PortalStream::new(firehose.clone()));
+    let fetch_service = FetchServer::new(PortalFetch::new(firehose));
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(FIREHOSE_DESCRIPTOR)
         .build()?;

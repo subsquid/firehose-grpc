@@ -92,16 +92,16 @@ impl From<State> for HashAndHeight {
 }
 
 pub struct Firehose {
-    archive: Arc<dyn DataSource + Sync + Send>,
+    portal: Arc<dyn DataSource + Sync + Send>,
     rpc: Option<Arc<dyn HotDataSource + Sync + Send>>,
 }
 
 impl Firehose {
     pub fn new(
-        archive: Arc<dyn DataSource + Sync + Send>,
+        portal: Arc<dyn DataSource + Sync + Send>,
         rpc: Option<Arc<dyn HotDataSource + Sync + Send>>,
     ) -> Firehose {
-        Firehose { archive, rpc }
+        Firehose { portal, rpc }
     }
 
     pub async fn blocks(
@@ -111,7 +111,7 @@ impl Firehose {
         let start_block = if let Some(rpc) = &self.rpc {
             resolve_negative_start(request.start_block_num, rpc.as_ds()).await?
         } else {
-            resolve_negative_start(request.start_block_num, &*self.archive).await?
+            resolve_negative_start(request.start_block_num, &*self.portal).await?
         };
         let to_block = if request.stop_block_num == 0 {
             None
@@ -164,12 +164,12 @@ impl Firehose {
             }
         }
 
-        let archive = self.archive.clone();
+        let portal = self.portal.clone();
         let rpc = self.rpc.clone();
 
         Ok(try_stream! {
-            let archive_height = archive.get_finalized_height().await?;
-            if archive_height as i64 > state.current_block() || rpc.is_none() {
+            let portal_height = portal.get_finalized_height().await?;
+            if portal_height as i64 > state.current_block() || rpc.is_none() {
                 let req = DataRequest {
                     from: max(state.next_block(), start_block),
                     to: to_block,
@@ -177,7 +177,7 @@ impl Firehose {
                     transactions: vec![],
                     traces: traces.clone(),
                 };
-                let mut stream = Pin::from(archive.get_finalized_blocks(req, rpc.is_some())?);
+                let mut stream = Pin::from(portal.get_finalized_blocks(req, rpc.is_some()).await?);
                 while let Some(result) = stream.next().await {
                     let blocks = result?;
                     for block in blocks {
@@ -223,7 +223,7 @@ impl Firehose {
                     transactions: vec![],
                     traces: traces.clone(),
                 };
-                let mut stream = Pin::from(rpc.get_finalized_blocks(req, true)?);
+                let mut stream = Pin::from(rpc.get_finalized_blocks(req, true).await?);
                 while let Some(result) = stream.next().await {
                     let blocks = result?;
                     for block in blocks {
@@ -314,7 +314,7 @@ impl Firehose {
 
     pub async fn block(&self, request: SingleBlockRequest) -> anyhow::Result<SingleBlockResponse> {
         if !request.transforms.is_empty() {
-            anyhow::bail!("trasnforms aren't supported in SingleBlockRequest")
+            anyhow::bail!("transforms aren't supported in SingleBlockRequest")
         }
 
         let block_num = match request.reference.as_ref().unwrap() {
@@ -334,14 +334,14 @@ impl Firehose {
             traces: vec![TraceRequest::default()],
         };
 
-        let archive_height = self.archive.get_finalized_height().await?;
-        let mut stream = if block_num <= archive_height {
-            Pin::from(self.archive.get_finalized_blocks(req, true)?)
+        let portal_height = self.portal.get_finalized_height().await?;
+        let mut stream = if block_num <= portal_height {
+            Pin::from(self.portal.get_finalized_blocks(req, true).await?)
         } else {
             if let Some(rpc) = &self.rpc {
                 let rpc_height = rpc.get_finalized_height().await?;
                 if block_num <= rpc_height {
-                    Pin::from(self.archive.get_finalized_blocks(req, true)?)
+                    Pin::from(self.portal.get_finalized_blocks(req, true).await?)
                 } else {
                     anyhow::bail!("block isn't found")
                 }

@@ -3,9 +3,9 @@ use crate::datasource::{
     TraceResult, TraceType, Transaction,
 };
 use crate::{
-    archive,
-    archive::{
-        Archive, BatchRequest, BlockFieldSelection, FieldSelection, LogFieldSelection, LogRequest,
+    portal,
+    portal::{
+        Portal, Query, BlockFieldSelection, FieldSelection, LogFieldSelection, LogRequest,
         TraceFieldSelection, TxFieldSelection, TraceRequest, TxRequest
     },
 };
@@ -13,21 +13,22 @@ use async_stream::try_stream;
 use serde_json::Number;
 use std::sync::Arc;
 use std::time::Duration;
+use std::pin::Pin;
 
 #[derive(Debug)]
-pub struct ArchiveDataSource {
-    archive: Arc<Archive>,
+pub struct PortalDataSource {
+    portal: Arc<Portal>,
 }
 
-impl ArchiveDataSource {
-    pub fn new(archive: Arc<Archive>) -> ArchiveDataSource {
-        ArchiveDataSource { archive }
+impl PortalDataSource {
+    pub fn new(portal: Arc<Portal>) -> PortalDataSource {
+        PortalDataSource { portal }
     }
 }
 
 #[async_trait::async_trait]
-impl DataSource for ArchiveDataSource {
-    fn get_finalized_blocks(
+impl DataSource for PortalDataSource {
+    async fn get_finalized_blocks(
         &self,
         request: DataRequest,
         stop_on_head: bool,
@@ -92,7 +93,6 @@ impl DataSource for ArchiveDataSource {
                 y_parity: true,
             });
             fields.trace = Some(TraceFieldSelection {
-                transaction_index: true,
                 r#type: true,
                 error: true,
                 create_from: true,
@@ -186,7 +186,6 @@ impl DataSource for ArchiveDataSource {
                 y_parity: true,
             });
             fields.trace = Some(TraceFieldSelection {
-                transaction_index: true,
                 r#type: true,
                 error: true,
                 create_from: true,
@@ -217,7 +216,7 @@ impl DataSource for ArchiveDataSource {
             Some(traces)
         };
 
-        let mut req = BatchRequest {
+        let mut query = Query {
             from_block: request.from,
             to_block: request.to,
             fields: Some(fields),
@@ -226,39 +225,37 @@ impl DataSource for ArchiveDataSource {
             traces,
         };
 
-        let archive = self.archive.clone();
+        let portal = self.portal.clone();
         Ok(Box::new(try_stream! {
             loop {
-                let height = archive.height().await?;
+                let stream = Pin::from(portal.stream(&query).await?);
+                for await block in stream {
+                    let block = Block::from(block?);
+                    let block_num = block.header.number;
 
-                if req.from_block > height {
-                    if stop_on_head {
-                        break;
-                    } else {
-                        tokio::time::sleep(Duration::from_secs(30)).await;
-                        continue;
+                    yield vec![block];
+
+                    if let Some(to_block) = query.to_block {
+                        if block_num == to_block {
+                            break;
+                        }
                     }
+
+                    query.from_block = block_num + 1
                 }
 
-                let blocks = archive.query(&req).await?;
-                let last_block_num = blocks[blocks.len() - 1].header.number;
-                let blocks = blocks.into_iter().map(|b| Block::from(b)).collect();
-
-                yield blocks;
-
-                if let Some(to_block) = req.to_block {
-                    if last_block_num == to_block {
-                        break;
-                    }
+                if stop_on_head {
+                    break;
+                } else {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    continue;
                 }
-
-                req.from_block = last_block_num + 1;
             }
         }))
     }
 
     async fn get_finalized_height(&self) -> anyhow::Result<u64> {
-        self.archive.height().await
+        self.portal.height().await
     }
 
     async fn get_block_hash(&self, _height: u64) -> anyhow::Result<String> {
@@ -266,7 +263,7 @@ impl DataSource for ArchiveDataSource {
     }
 }
 
-fn number_to_u64(value: Number) -> u64 {
+fn to_u64(value: Number) -> u64 {
     if let Some(val) = value.as_u64() {
         return val;
     }
@@ -276,8 +273,8 @@ fn number_to_u64(value: Number) -> u64 {
     unimplemented!()
 }
 
-impl From<archive::BlockHeader> for BlockHeader {
-    fn from(value: archive::BlockHeader) -> Self {
+impl From<portal::BlockHeader> for BlockHeader {
+    fn from(value: portal::BlockHeader) -> Self {
         BlockHeader {
             number: value.number,
             hash: value.hash,
@@ -293,7 +290,7 @@ impl From<archive::BlockHeader> for BlockHeader {
             total_difficulty: value.total_difficulty,
             gas_limit: value.gas_limit,
             gas_used: value.gas_used,
-            timestamp: number_to_u64(value.timestamp),
+            timestamp: to_u64(value.timestamp),
             extra_data: value.extra_data,
             mix_hash: value.mix_hash,
             nonce: value.nonce,
@@ -302,8 +299,8 @@ impl From<archive::BlockHeader> for BlockHeader {
     }
 }
 
-impl From<archive::Log> for Log {
-    fn from(value: archive::Log) -> Self {
+impl From<portal::Log> for Log {
+    fn from(value: portal::Log) -> Self {
         Log {
             address: value.address,
             data: value.data,
@@ -314,8 +311,8 @@ impl From<archive::Log> for Log {
     }
 }
 
-impl From<archive::Transaction> for Transaction {
-    fn from(value: archive::Transaction) -> Self {
+impl From<portal::Transaction> for Transaction {
+    fn from(value: portal::Transaction) -> Self {
         Transaction {
             transaction_index: value.transaction_index,
             hash: value.hash,
@@ -341,30 +338,30 @@ impl From<archive::Transaction> for Transaction {
     }
 }
 
-impl From<archive::TraceType> for TraceType {
-    fn from(value: archive::TraceType) -> Self {
+impl From<portal::TraceType> for TraceType {
+    fn from(value: portal::TraceType) -> Self {
         match value {
-            archive::TraceType::Call => TraceType::Call,
-            archive::TraceType::Create => TraceType::Create,
-            archive::TraceType::Reward => TraceType::Reward,
-            archive::TraceType::Suicide => TraceType::Suicide,
+            portal::TraceType::Call => TraceType::Call,
+            portal::TraceType::Create => TraceType::Create,
+            portal::TraceType::Reward => TraceType::Reward,
+            portal::TraceType::Suicide => TraceType::Suicide,
         }
     }
 }
 
-impl From<archive::CallType> for CallType {
-    fn from(value: archive::CallType) -> Self {
+impl From<portal::CallType> for CallType {
+    fn from(value: portal::CallType) -> Self {
         match value {
-            archive::CallType::Call => CallType::Call,
-            archive::CallType::Callcode => CallType::Callcode,
-            archive::CallType::Delegatecall => CallType::Delegatecall,
-            archive::CallType::Staticcall => CallType::Staticcall,
+            portal::CallType::Call => CallType::Call,
+            portal::CallType::Callcode => CallType::Callcode,
+            portal::CallType::Delegatecall => CallType::Delegatecall,
+            portal::CallType::Staticcall => CallType::Staticcall,
         }
     }
 }
 
-impl From<archive::TraceAction> for TraceAction {
-    fn from(value: archive::TraceAction) -> Self {
+impl From<portal::TraceAction> for TraceAction {
+    fn from(value: portal::TraceAction) -> Self {
         TraceAction {
             from: value.from,
             to: value.to,
@@ -376,8 +373,8 @@ impl From<archive::TraceAction> for TraceAction {
     }
 }
 
-impl From<archive::TraceResult> for TraceResult {
-    fn from(value: archive::TraceResult) -> Self {
+impl From<portal::TraceResult> for TraceResult {
+    fn from(value: portal::TraceResult) -> Self {
         TraceResult {
             gas_used: value.gas_used,
             address: value.address,
@@ -386,8 +383,8 @@ impl From<archive::TraceResult> for TraceResult {
     }
 }
 
-impl From<archive::Trace> for Trace {
-    fn from(value: archive::Trace) -> Self {
+impl From<portal::Trace> for Trace {
+    fn from(value: portal::Trace) -> Self {
         Trace {
             transaction_index: value.transaction_index,
             r#type: TraceType::from(value.r#type),
@@ -403,8 +400,8 @@ impl From<archive::Trace> for Trace {
     }
 }
 
-impl From<archive::Block> for Block {
-    fn from(value: archive::Block) -> Self {
+impl From<portal::Block> for Block {
+    fn from(value: portal::Block) -> Self {
         Block {
             header: BlockHeader::from(value.header),
             logs: value

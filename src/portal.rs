@@ -1,3 +1,6 @@
+use std::io::BufRead;
+use futures_util::TryStreamExt;
+use prost::bytes::Buf;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Number;
@@ -106,7 +109,6 @@ pub struct TxFieldSelection {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceFieldSelection {
-    pub transaction_index: bool,
     pub r#type: bool,
     pub error: bool,
     pub create_from: bool,
@@ -138,7 +140,7 @@ pub struct FieldSelection {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct BatchRequest {
+pub struct Query {
     pub from_block: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to_block: Option<u64>,
@@ -269,15 +271,15 @@ pub struct Block {
 }
 
 #[derive(Debug)]
-pub struct Archive {
+pub struct Portal {
     client: Client,
     url: String,
 }
 
-impl Archive {
-    pub fn new(url: String) -> Archive {
+impl Portal {
+    pub fn new(url: String) -> Portal {
         let client = Client::new();
-        Archive { client, url }
+        Portal { client, url }
     }
 
     pub async fn height(&self) -> anyhow::Result<u64> {
@@ -289,43 +291,44 @@ impl Archive {
 
         if let Err(_) = response.error_for_status_ref() {
             let text = response.text().await?;
-            anyhow::bail!("failed response from archive - {}", text);
+            anyhow::bail!("failed response from portal - {}", text);
         }
 
         let text = response.text().await?;
-        debug!("archive height {}", text);
+        debug!("portal height {}", text);
         serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("serialization error - {}", e))
     }
 
-    pub async fn query(&self, request: &BatchRequest) -> anyhow::Result<Vec<Block>> {
-        debug!("archive query {:?}", request);
-        let worker_url = self.worker(request.from_block).await?;
-        let response = self.client.post(worker_url).json(&request).send().await?;
+    pub async fn stream(&self, query: &Query) -> anyhow::Result<Box<dyn futures_core::Stream<Item = anyhow::Result<Block>> + Send>> {
+        let url = format!("{}/stream", self.url);
+        let response = self.client.post(url).json(query).send().await?;
 
         if let Err(_) = response.error_for_status_ref() {
             let text = response.text().await?;
-            anyhow::bail!("failed response from archive - {}", text);
+            anyhow::bail!("failed response from portal - {}", text);
         }
 
-        let text = response.text().await?;
-        debug!("archive query result {}", text);
-        serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("serialization error - {}", e))
-    }
+        let mut stream = response.bytes_stream();
+        let mut line = String::new();
+        Ok(Box::new(async_stream::try_stream! {
+            while let Some(chunk) = stream.try_next().await? {
+                let mut reader = chunk.reader();
+                loop {
+                    if 0 == reader.read_line(&mut line)? {
+                        break
+                    }
 
-    pub async fn worker(&self, start_block: u64) -> anyhow::Result<String> {
-        let response = self
-            .client
-            .get(format!("{}/{}/worker", self.url, start_block))
-            .send()
-            .await?;
+                    if let Some(last) = line.chars().last() {
+                        if last != '\n' {
+                            continue;
+                        }
+                    }
 
-        if let Err(_) = response.error_for_status_ref() {
-            let text = response.text().await?;
-            anyhow::bail!("failed response from archive - {}", text);
-        }
-
-        let worker_url = response.text().await?;
-        debug!("worker url {}", worker_url);
-        Ok(worker_url)
+                    let block = serde_json::from_str(&line)?;
+                    line.clear();
+                    yield block
+                }
+            }
+        }))
     }
 }

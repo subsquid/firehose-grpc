@@ -564,7 +564,7 @@ pub struct RpcDataSource {
 
 #[async_trait::async_trait]
 impl DataSource for RpcDataSource {
-    fn get_finalized_blocks(
+    async fn get_finalized_blocks(
         &self,
         request: DataRequest,
         _stop_on_head: bool,

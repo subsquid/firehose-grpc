@@ -1,8 +1,8 @@
 #[derive(clap::Parser)]
 pub struct Cli {
-    /// Subsquid archive endpoint URL
+    /// Subsquid portal endpoint URL
     #[clap(long)]
-    pub archive: String,
+    pub portal: String,
 
     /// Rpc api URL of an ethereum node
     #[clap(long)]

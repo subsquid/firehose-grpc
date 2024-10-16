@@ -5,18 +5,18 @@ use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error};
 
-pub struct ArchiveStream {
+pub struct PortalStream {
     firehose: Arc<Firehose>,
 }
 
-impl ArchiveStream {
-    pub fn new(firehose: Arc<Firehose>) -> ArchiveStream {
-        ArchiveStream { firehose }
+impl PortalStream {
+    pub fn new(firehose: Arc<Firehose>) -> PortalStream {
+        PortalStream { firehose }
     }
 }
 
 #[tonic::async_trait]
-impl Stream for ArchiveStream {
+impl Stream for PortalStream {
     type BlocksStream = ReceiverStream<Result<Response, tonic::Status>>;
 
     async fn blocks(
