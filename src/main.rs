@@ -11,6 +11,7 @@ use std::sync::Arc;
 use stream::PortalStream;
 use tonic::transport::Server;
 use tracing::info;
+use metrics::start_prometheus_server;
 
 mod portal;
 mod cli;
@@ -22,6 +23,7 @@ mod fetch;
 mod firehose;
 mod logger;
 mod stream;
+mod metrics;
 
 #[path = "protobuf/sf.firehose.v2.rs"]
 mod pbfirehose;
@@ -48,6 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+
+    start_prometheus_server().await?;
+    info!("prometheus metrics are available at 0.0.0.0:3000");
 
     let portal = Arc::new(Portal::new(args.portal));
     let portal_ds = Arc::new(PortalDataSource::new(portal));

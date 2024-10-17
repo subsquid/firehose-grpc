@@ -9,13 +9,16 @@ edition = "2021"
 anyhow = "1.0.75"
 async-stream = "0.3.5"
 async-trait = "0.1.73"
+axum = "0.7.7"
 clap = { version = "4.3.23", features = ["derive"] }
 ethers-core = "2.0.9"
 ethers-providers = { version = "2.0.9", features = ["rustls"] }
 futures-core = "0.3.28"
 futures-util = "0.3.28"
+lazy_static = "1.5.0"
 libc = "0.2.147"
 prefix-hex = { version = "0.7.1", features = ["std"] }
+prometheus = { version = "0.13.4", features = ["process"] }
 prost = "0.11"
 prost-types = "0.11"
 reqwest = { version = "0.11", features = ["json", "stream"], default-features = false }

@@ -1,5 +1,6 @@
 use crate::firehose::Firehose;
 use crate::pbfirehose::{stream_server::Stream, Request, Response};
+use crate::metrics;
 use futures_util::stream::StreamExt;
 use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -23,6 +24,7 @@ impl Stream for PortalStream {
         &self,
         request: tonic::Request<Request>,
     ) -> Result<tonic::Response<Self::BlocksStream>, tonic::Status> {
+        metrics::REQUESTS_COUNTER.inc();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
 
         let request = request.into_inner();
@@ -38,6 +40,7 @@ impl Stream for PortalStream {
             };
 
             debug!("block stream established successfully");
+            metrics::ACTIVE_REQUESTS.inc();
 
             tokio::pin!(stream);
 
@@ -46,17 +49,20 @@ impl Stream for PortalStream {
                     Ok(response) => {
                         if let Err(e) = tx.send(Ok(response)).await {
                             debug!("block stream has been closed: {}", e);
+                            metrics::ACTIVE_REQUESTS.dec();
                             return;
                         }
                     }
                     Err(e) => {
                         error!("error while streaming data: {}", e);
+                        metrics::ACTIVE_REQUESTS.dec();
                         return;
                     }
                 }
             }
 
             debug!("block stream finished");
+            metrics::ACTIVE_REQUESTS.dec();
         });
 
         Ok(tonic::Response::new(ReceiverStream::new(rx)))
