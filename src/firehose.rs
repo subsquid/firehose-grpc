@@ -108,6 +108,10 @@ impl Firehose {
         &self,
         request: Request,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Response>>> {
+        if request.final_blocks_only {
+            anyhow::bail!("final_blocks_only requests aren't supported")
+        }
+
         let start_block = if let Some(rpc) = &self.rpc {
             resolve_negative_start(request.start_block_num, rpc.as_ds()).await?
         } else {
@@ -130,6 +134,10 @@ impl Firehose {
         let mut traces: Vec<TraceRequest> = vec![];
         for transform in &request.transforms {
             let filter = CombinedFilter::decode(&transform.value[..])?;
+
+            if filter.send_all_block_headers {
+                anyhow::bail!("send_all_block_headers isn't implemented for CombinedFilter")
+            }
 
             for log_filter in filter.log_filters {
                 let mut log_request = LogRequest::from(log_filter);
