@@ -1,38 +1,20 @@
-use portal::Portal;
-use clap::Parser;
-use cli::Cli;
-use datasource::HotDataSource;
-use ds_portal::PortalDataSource;
-use ds_rpc::RpcDataSource;
-use fetch::PortalFetch;
-use firehose::Firehose;
-use pbfirehose::{fetch_server::FetchServer, stream_server::StreamServer};
 use std::sync::Arc;
-use stream::PortalStream;
+
+use clap::Parser;
 use tonic::transport::Server;
 use tracing::info;
-use metrics::start_prometheus_server;
 
-mod portal;
-mod cli;
-mod cursor;
-mod datasource;
-mod ds_portal;
-mod ds_rpc;
-mod fetch;
-mod firehose;
-mod logger;
-mod stream;
-mod metrics;
-
-#[path = "protobuf/sf.firehose.v2.rs"]
-mod pbfirehose;
-
-#[path = "protobuf/sf.ethereum.transform.v1.rs"]
-mod pbtransforms;
-
-#[path = "protobuf/sf.ethereum.r#type.v2.rs"]
-mod pbcodec;
+use firehose_grpc::ds_portal::PortalDataSource;
+use firehose_grpc::cli::Cli;
+use firehose_grpc::ds_rpc::RpcDataSource;
+use firehose_grpc::fetch::PortalFetch;
+use firehose_grpc::firehose::Firehose;
+use firehose_grpc::pbfirehose::{fetch_server::FetchServer, stream_server::StreamServer};
+use firehose_grpc::stream::PortalStream;
+use firehose_grpc::metrics::start_prometheus_server;
+use firehose_grpc::portal::Portal;
+use firehose_grpc::datasource::HotDataSource;
+use firehose_grpc::logger;
 
 const FIREHOSE_DESCRIPTOR: &[u8] = tonic::include_file_descriptor_set!("firehose_descriptor");
 
