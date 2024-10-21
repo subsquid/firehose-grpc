@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fetch_service = FetchServer::new(PortalFetch::new(firehose));
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(FIREHOSE_DESCRIPTOR)
-        .build()?;
+        .build_v1()?;
 
     info!("starting firehose-grpc at 0.0.0.0:13042");
     let addr = "0.0.0.0:13042".parse()?;

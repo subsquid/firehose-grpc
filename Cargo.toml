@@ -19,17 +19,17 @@ lazy_static = "1.5.0"
 libc = "0.2.147"
 prefix-hex = { version = "0.7.1", features = ["std"] }
 prometheus = { version = "0.13.4", features = ["process"] }
-prost = "0.11"
-prost-types = "0.11"
+prost = "0.13.3"
+prost-types = "0.13.3"
 reqwest = { version = "0.11", features = ["json", "stream"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.103"
 tokio = { version = "1.29", features = ["macros", "rt-multi-thread"] }
 tokio-stream = "0.1"
-tonic = "0.9"
-tonic-reflection = "0.9"
+tonic = "0.12.3"
+tonic-reflection = "0.12.3"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["json", "env-filter"] }
 
 [build-dependencies]
-tonic-build = "0.9"
+tonic-build = "0.12.3"
