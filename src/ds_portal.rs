@@ -201,6 +201,15 @@ impl DataSource for PortalDataSource {
                 call_result_gas_used: true,
                 call_result_output: true,
             });
+            if request.traces.iter().any(|r| r.transaction_logs) {
+                fields.log = Some(LogFieldSelection {
+                    transaction_index: true,
+                    log_index: true,
+                    address: true,
+                    data: true,
+                    topics: true,
+                })
+            }
             let traces = request
                 .traces
                 .into_iter()
@@ -226,7 +235,7 @@ impl DataSource for PortalDataSource {
 
         let portal = self.portal.clone();
         Ok(Box::new(try_stream! {
-            loop {
+            'outer: loop {
                 let stream = portal.stream(&query).await?;
                 for await block in stream {
                     let block = Block::from(block?);
@@ -236,7 +245,7 @@ impl DataSource for PortalDataSource {
 
                     if let Some(to_block) = query.to_block {
                         if block_num == to_block {
-                            break;
+                            break 'outer;
                         }
                     }
 
