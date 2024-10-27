@@ -31,7 +31,7 @@ impl Stream for PortalStream {
         let firehose = self.firehose.clone();
 
         tokio::spawn(async move {
-            let stream = match firehose.blocks(request).await {
+            let stream = match firehose.blocks(&request).await {
                 Ok(stream) => stream,
                 Err(e) => {
                     error!("failed to establish block stream: {}", e);

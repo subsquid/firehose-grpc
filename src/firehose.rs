@@ -106,7 +106,7 @@ impl Firehose {
 
     pub async fn blocks(
         &self,
-        request: Request,
+        request: &Request,
     ) -> anyhow::Result<impl Stream<Item = anyhow::Result<Response>>> {
         if request.final_blocks_only {
             anyhow::bail!("final_blocks_only requests aren't supported")
@@ -320,7 +320,7 @@ impl Firehose {
         })
     }
 
-    pub async fn block(&self, request: SingleBlockRequest) -> anyhow::Result<SingleBlockResponse> {
+    pub async fn block(&self, request: &SingleBlockRequest) -> anyhow::Result<SingleBlockResponse> {
         if !request.transforms.is_empty() {
             anyhow::bail!("transforms aren't supported in SingleBlockRequest")
         }

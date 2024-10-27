@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
+use tracing::error;
+
 use crate::firehose::Firehose;
 use crate::pbfirehose::{fetch_server::Fetch, SingleBlockRequest, SingleBlockResponse};
-use std::sync::Arc;
-use tracing::error;
 
 pub struct PortalFetch {
     firehose: Arc<Firehose>,
@@ -20,7 +22,7 @@ impl Fetch for PortalFetch {
         request: tonic::Request<SingleBlockRequest>,
     ) -> Result<tonic::Response<SingleBlockResponse>, tonic::Status> {
         let request = request.into_inner();
-        let response = match self.firehose.block(request).await {
+        let response = match self.firehose.block(&request).await {
             Ok(response) => response,
             Err(e) => {
                 error!("failed to fetch block: {}", e);
